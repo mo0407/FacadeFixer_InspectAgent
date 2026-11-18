@@ -1,0 +1,19 @@
+{
+  "schema_version": "model-gateway-v1",
+  "api_enabled": false,
+  "connections": {
+    "planner": {
+      "adapter": "chat_completions", "model": "REPLACE_WITH_PLANNER_MODEL",
+      "endpoint_env": "FACADE_PLANNER_ENDPOINT", "api_key_env": "FACADE_PLANNER_API_KEY"
+    },
+    "reviewer": {
+      "adapter": "chat_completions", "model": "REPLACE_WITH_REFLECTOR_MODEL",
+      "endpoint_env": "FACADE_REFLECTOR_ENDPOINT", "api_key_env": "FACADE_REFLECTOR_API_KEY"
+    },
+    "librarian": {
+      "adapter": "chat_completions", "model": "REPLACE_WITH_CURATOR_MODEL",
+      "endpoint_env": "FACADE_CURATOR_ENDPOINT", "api_key_env": "FACADE_CURATOR_API_KEY"
+    }
+  },
+  "roles": {"generator": "planner", "reflector": "reviewer", "curator": "librarian"}
+}

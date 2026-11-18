@@ -1,0 +1,13 @@
+{
+  "task": "评审目标建筑的视频到报告流程；不包含外楼梯、门、窗。当前没有人工验收真值。",
+  "evidence": {
+    "scope-note": "演练证据：建筑粗裁剪可能仍包含背景，需检查范围归属。",
+    "reference-note": "演练证据：缺陷召回率与Mask质量门槛及人工参考尚未冻结。"
+  },
+  "metrics": [
+    {"id": "scope_false_positives", "value": null, "threshold": null, "direction": "max", "evidence_ids": ["scope-note"], "reference_verified": false},
+    {"id": "defect_recall", "value": null, "threshold": null, "direction": "min", "evidence_ids": ["reference-note"], "reference_verified": false}
+  ],
+  "acceptance_version": "evaluation-standard-v1-unfrozen",
+  "playbook_version": "empty-v1"
+}

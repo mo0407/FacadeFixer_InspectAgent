@@ -1,0 +1,20 @@
+{
+  "schema_version": "model-gateway-v1",
+  "api_enabled": true,
+  "connections": {
+    "standard": {
+      "adapter": "responses",
+      "model": "gpt-6.1-sol",
+      "reasoning_mode": "standard",
+      "endpoint_env": "FACADE_APINEBULA_RESPONSES_ENDPOINT",
+      "api_key_env": "FACADE_APINEBULA_API_KEY",
+      "timeout_seconds": 120,
+      "max_output_tokens": 4000
+    }
+  },
+  "roles": {
+    "generator": "standard",
+    "reflector": "standard",
+    "curator": "standard"
+  }
+}

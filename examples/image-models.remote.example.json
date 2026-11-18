@@ -1,0 +1,28 @@
+{
+  "schema_version": "model-gateway-v1",
+  "api_enabled": false,
+  "connections": {
+    "image_inspector": {
+      "adapter": "chat_completions",
+      "model": "replace-with-vision-model",
+      "endpoint_env": "FACADE_IMAGE_ENDPOINT",
+      "api_key_env": "FACADE_IMAGE_API_KEY",
+      "supports_images": true,
+      "timeout_seconds": 90,
+      "max_output_tokens": 8000
+    },
+    "offline_reflector": {
+      "adapter": "mock",
+      "model": "mock-reflector"
+    },
+    "offline_curator": {
+      "adapter": "mock",
+      "model": "mock-curator"
+    }
+  },
+  "roles": {
+    "generator": "image_inspector",
+    "reflector": "offline_reflector",
+    "curator": "offline_curator"
+  }
+}

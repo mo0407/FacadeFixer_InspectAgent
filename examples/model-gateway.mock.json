@@ -1,0 +1,10 @@
+{
+  "schema_version": "model-gateway-v1",
+  "api_enabled": false,
+  "connections": {
+    "planner": {"adapter": "mock", "model": "mock-generator"},
+    "reviewer": {"adapter": "mock", "model": "mock-reflector"},
+    "librarian": {"adapter": "mock", "model": "mock-curator"}
+  },
+  "roles": {"generator": "planner", "reflector": "reviewer", "curator": "librarian"}
+}

@@ -1,0 +1,32 @@
+{
+  "version": "image-p0-example-v1",
+  "rules": [
+    {
+      "id": "scope-wall-only",
+      "condition": "检查外立面候选时",
+      "recommendation": "聚焦目标建筑可见墙面；排除门、窗、外楼梯和背景建筑。边界或遮挡不明确时标记待定。",
+      "limitations": "规则不能替代经过复核的原图墙面范围 mask。",
+      "evidence_ids": [],
+      "helpful": 0,
+      "harmful": 0
+    },
+    {
+      "id": "inspect-uncertain-local-evidence",
+      "condition": "候选较小、置信度较低，或网格区域存在尚未看清的可疑纹理时",
+      "recommendation": "优先选择对应锚点，从原图裁剪并结合局部专家结果复核；不要把拼缝、阴影或遮挡直接当作缺陷。",
+      "limitations": "每张图片最多两次局部检查；看不清时保留待定，不推断不可见细节。",
+      "evidence_ids": [],
+      "helpful": 0,
+      "harmful": 0
+    },
+    {
+      "id": "visual-result-is-not-ground-truth",
+      "condition": "输出最终候选或解释检测效果时",
+      "recommendation": "逐项说明保留、拒绝或待定的理由；模型输出作为待人工验收的视觉候选，不声称是人工真值或结构安全诊断。",
+      "limitations": "本示例规则由配置提供，尚无经过验收的经验增益证据。",
+      "evidence_ids": [],
+      "helpful": 0,
+      "harmful": 0
+    }
+  ]
+}

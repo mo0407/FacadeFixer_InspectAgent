@@ -1,0 +1,11 @@
+{
+  "image_path": "images/facade.jpg",
+  "detector_profiles": ["yolo11m", "yolo12m"],
+  "low_threshold": 0.1,
+  "high_threshold": 0.5,
+  "max_inspections": 2,
+  "grid_rows": 3,
+  "grid_cols": 3,
+  "merge_iou": 0.5,
+  "inference_size": 960
+}

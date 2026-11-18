@@ -1,0 +1,9 @@
+{
+  "job_id": "image_inspection_00000000000000000000000000000000",
+  "reason_code": "bbox_inaccurate",
+  "occurrence_key": "review-001:candidate-0001",
+  "summary": "人工复核说明：candidate-0001 的框未覆盖缺陷右侧边缘，请结合该任务的局部证据图核对。请将本示例替换为实际复核结论。",
+  "evidence_refs": ["candidate-0001-evidence.png"],
+  "reviewer": "reviewer-name",
+  "candidate_id": "candidate-0001"
+}
