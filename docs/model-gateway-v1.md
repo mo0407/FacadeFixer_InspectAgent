@@ -42,7 +42,7 @@ python -m facade_mcp.cli --workspace workspace/reviews review-cycle --config exa
 
 ## 接入不同供应商
 
-文本评审可复制 `examples/model-gateway.remote.json`，为三个角色分别填写实际模型名称。图像主动巡检可复制 `examples/image-models.remote.example.json`，其中 Generator 为远程图像连接，Reflector、Curator 保留 mock 离线占位。各 `endpoint_env` 指向完整的 HTTPS API 端点，不是仅填写域名；具体端点与模型能力按供应商文档配置。
+文本评审可复制 `examples/model-gateway.remote.json`，为三个角色分别填写实际模型名称。图像及规则流程可复制 `examples/image-models.remote.example.json`，示例把三个角色映射到同一 `gpt-6.1-sol` Responses 连接，使用 `reasoning_effort="medium"` 和 `expected_model` 响应身份校验。各 `endpoint_env` 指向完整的 HTTPS API 端点，不是仅填写域名；具体端点、实际响应模型和视觉能力须在供应商实际服务上确认。
 
 在本地环境设置配置中引用的 endpoint/key 环境变量。不要把 API key 写进 JSON、代码库或聊天。准备好请求文本的外发范围后，设置 `api_enabled=true`，并用 `--allow-api` 执行。
 
@@ -87,6 +87,6 @@ Curator 可提议 add/revise/deprecate，后两者要求 `target_rule_id`。程�
 
 新增产物 `playbook_snapshot.json` 保存完整上下文，`context_delta.json` 保存候选增量及规则反馈，`trajectory.json` 串联计划、评价、引用和反思。原有输出文件继续保留。调优控制器通过 `playbook=` 接收同样的快照，整次运行的版本冻结。
 
-本阶段产物供后续独立验证与审核使用，已采用规则库的持久化合并和自动晋升仍待实现。执行日志使用结构化引用，避免依赖提示词文本中的 ID 正则提取。测试覆盖上下文注入、重复规则、错误目标、引用范围和版本冲突。
+`review-cycle` 产物继续作为待验证提案保存，不直接发布规则。图像版另提供离线规则生命周期：有证据历史 → 复盘/整理候选 → 独立人工参考集成对重放 → 通过门槛与正向改善 → 发布供下轮加载的 P0。mock、模拟 HTTP 和注入执行器不能发布正式 P0，详见 [完整流程](complete-image-workflow.md)。执行日志使用结构化引用，避免依赖提示词文本中的 ID 正则提取。
 
 已增加[像素评价与有界调优控制器](optimization-controller-v1.md)，支持独立计算配对 mask 指标，以及通过显式执行适配器重测。视频自动执行仍未接入。

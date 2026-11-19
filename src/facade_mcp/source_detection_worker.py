@@ -53,6 +53,7 @@ def _offline():
     """The calling process is isolated; local models may never fetch assets."""
     environment = {
         "YOLO_AUTOINSTALL": "false", "YOLO_OFFLINE": "true",
+        "YOLOv5_AUTOINSTALL": "false", "PIP_NO_INDEX": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
         "WANDB_DISABLED": "true", "COMET_MODE": "DISABLED",
     }

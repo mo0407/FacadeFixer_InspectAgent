@@ -19,6 +19,7 @@ def test_catalog_is_fixed_and_kind_cannot_be_supplied(tmp_path):
         "model_weights_missing", "model_runtime_error", "mcp_connection_error",
         "api_timeout", "api_unauthorized", "api_rate_limited", "api_http_error",
         "api_transport_error", "model_output_invalid", "invalid_inspection_action",
+        "model_version_changed", "expert_unavailable",
         "candidate_budget_exceeded", "final_review_invalid", "unclassified_runtime_error"}
     assert {code for code, value in REASONS.items() if value["kind"] == "quality"} == {
         "missed_defect", "false_positive", "wrong_class", "bbox_inaccurate", "mask_inaccurate",

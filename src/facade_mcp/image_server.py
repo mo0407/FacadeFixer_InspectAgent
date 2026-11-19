@@ -62,6 +62,56 @@ def facade_image_record_feedback(feedback: dict) -> dict:
     return record_feedback(ArtifactStore.from_env(),FailureFeedback.model_validate(feedback))
 
 
+@server.tool
+def facade_image_rules_latest() -> dict:
+    """Read the immutable validated P0 selected automatically for the next run."""
+    from .rule_lifecycle import RuleLifecycle
+    book=RuleLifecycle(ArtifactStore.from_env()).latest()
+    return {'playbook':book.model_dump(mode='json') if book else None}
+
+
+@server.tool
+async def facade_image_rule_propose(model_config_path: str, playbook_path: str | None = None,
+                                   job_ids: list[str] | None = None, allow_api: bool = False) -> dict:
+    """Summarize historical non-mock failures into a cited candidate P0; does not adopt it."""
+    from .rule_lifecycle import RuleLifecycle
+    store=ArtifactStore.from_env()
+    settings=ModelConfig.model_validate_json(store.resolve_input(model_config_path).read_text(encoding='utf-8-sig'))
+    parent=Playbook.model_validate_json(store.resolve_input(playbook_path).read_text(encoding='utf-8-sig')) if playbook_path else None
+    return await RuleLifecycle(store).propose(settings,parent=parent,job_ids=job_ids,allow_api=allow_api)
+
+
+@server.tool
+async def facade_image_rule_validate(candidate_path: str, dataset_path: str,
+                                    model_config_path: str, allow_api: bool = False) -> dict:
+    """Replay baseline/candidate on independent labeled images and promote only after gates pass."""
+    from .rule_lifecycle import RuleLifecycle
+    store=ArtifactStore.from_env()
+    settings=ModelConfig.model_validate_json(store.resolve_input(model_config_path).read_text(encoding='utf-8-sig'))
+    return await RuleLifecycle(store).validate_and_promote(candidate_path,dataset_path,settings,allow_api=allow_api)
+
+
+@server.tool
+async def facade_image_rule_cycle(dataset_path: str, model_config_path: str,
+                                 job_ids: list[str] | None = None, allow_api: bool = False) -> dict:
+    """Run one bounded OFFLINE failure→proposal→paired evaluation→promotion cycle."""
+    from .rule_lifecycle import RuleLifecycle
+    store=ArtifactStore.from_env()
+    settings=ModelConfig.model_validate_json(store.resolve_input(model_config_path).read_text(encoding='utf-8-sig'))
+    lifecycle=RuleLifecycle(store)
+    proposal=await lifecycle.propose(settings,job_ids=job_ids,allow_api=allow_api)
+    return await lifecycle.validate_and_promote(proposal['candidate_playbook_path'],dataset_path,settings,allow_api=allow_api)
+
+
+@server.tool
+async def facade_image_validate_vision(model_config_path: str, allow_api: bool = False) -> dict:
+    """Test remote vision/action JSON with synthetic color-ID evidence; mock never proves capability."""
+    from .model_gateway import validate_vision_connection
+    store=ArtifactStore.from_env()
+    settings=ModelConfig.model_validate_json(store.resolve_input(model_config_path).read_text(encoding='utf-8-sig'))
+    return await validate_vision_connection(settings,store.root/'vision-validation.json',allow_api=allow_api)
+
+
 def main():
     server.run()
 

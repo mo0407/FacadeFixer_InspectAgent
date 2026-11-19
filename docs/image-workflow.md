@@ -4,9 +4,9 @@
 
 ## 1. 运行边界
 
-源代码保留在 `E:\ai\低空\FacadeFixer_VIDEO`，图像改造位于 `E:\ai\低空\FacadeFixer_IMAGE`。复制来源提交及原始文件的 SHA-256 见根目录 `backup-manifest.json`。副本不携带原仓库的 Git 历史、忽略文件、模型权重、运行结果和密钥；需要通过环境变量连接现有本地模型环境。
+源代码保留在本机 `E:\ai\低空\FacadeFixer_VIDEO`，图像改造位于 `E:\ai\低空\FacadeFixer_IMAGE`，对应远程项目 FacadeFixer_InspectAgent。复制来源提交及原始文件的 SHA-256 记录在本机保留的 `backup-manifest.json`，该溯源文件不随仓库发布。副本不携带原仓库的 Git 历史、忽略文件、模型权重、运行结果和密钥；需要通过环境变量连接现有本地模型环境。
 
-同一张图的最多两次局部检查属于一次运行。一次运行中 VLM 权重不变、P0 规则快照不变、检查预算不变。复盘和规则整理发生在离线阶段，为后续运行提出新规则，不能悄悄改变当前轮的上下文。
+同一张图的最多两次局部检查属于一次运行。一次运行中模型身份、专家权重哈希、P0 规则快照与检查预算冻结。`image-inspect` 默认加载已验证发布的最新版规则，显式 `--playbook` 可覆盖。复盘和规则整理发生在离线阶段；提案需经过独立参考集成对验证与正向改善检验才可发布，不能悄悄改变当前轮的上下文。完整用法见 [图像检查与离线规则闭环](complete-image-workflow.md)。
 
 ## 2. 每个环节的输入与输出
 
@@ -50,11 +50,13 @@ VLM 选择工具动作，Python 执行框架控制工具许可和预算。框坐
 | `inference_size` | `960` | 支持该参数的专家模型推理尺寸 |
 | `scope_mask_path` | `images/facade-wall.png` | 可选，原图等尺寸的二值墙面范围 mask |
 | `context_regions` | `[]` | 可选的 Env 区域列表；每项包括唯一 `id`、`bbox_xyxy` 和 `description` |
+| `context_mode` | `auto` | 自动从范围 mask 连通域或 VLM 场景判断建立 Env；另可选 `manual` / `none` |
+| `expert_class_filters` | `{}` | 按 profile 收窄允许类别，不能扩大专家已声明能力 |
 | `max_candidates` | `200` | 候选观察数量上限；超出时明确失败，不静默丢弃候选 |
 
-图中的 YOLOv9e-seg、CUBIT 数据和 12 类自训练权重不是随复制自动获得的模型。模型名称必须与本地 MCP 实际支持的 profile 一致；可先用 `python -m facade_mcp.cli models` 检查配置、权重和依赖。
+已提供 YOLOv9 分割和 Ultralytics 自定义专家的服务器注册适配器，见 `examples/experts.registry.example.json`。图中的 CUBIT 数据与权重并不随代码提供，也未在本次开发中验收。模型名称须与实际注册 profile 一致；`facade_models_capabilities` 读取类别、资格和真实权重哈希，不加载模型。`python -m facade_mcp.cli models` 另可探测旧模型环境的依赖配置。
 
-`inference_size` 必须为 32 的倍数，当前仅向支持该选项的 YOLO profile 传入。`context_regions` 的 ID 采用 `env-` 前缀，例如 `{"id":"env-wall-top","bbox_xyxy":[100,100,700,400],"description":"目标墙面顶部"}`；坐标必须在原图范围内。
+`inference_size` 必须为 32 的倍数，当前仅向支持该选项的专家传入。`context_regions` 的 ID 采用 `env-` 前缀，例如 `{"id":"env-wall-top","bbox_xyxy":[100,100,700,400],"description":"目标墙面顶部"}`；坐标必须在原图范围内。`auto` 模式在有范围 mask 时按连通域建立墙面 Env；否则把图片交给 VLM 区分墙面、门窗、外楼梯、背景与上下文。自动 Env 仅为上下文线索，不是像素 mask 或人工真值。
 
 ## 5. 坐标、范围与去重
 
@@ -74,7 +76,7 @@ VLM 选择工具动作，Python 执行框架控制工具许可和预算。框坐
 
 远程连接沿用 `chat_completions` 或 `responses`。设置模型名、`endpoint_env`、`api_key_env`，通过环境变量提供完整 API 端点及密钥。配置中的 `api_enabled` 和 CLI 的 `--allow-api` 都开启后才允许远程调用。图片证据、候选和 P0 会随请求发往配置的服务商；审计记录不写入图片 base64 或密钥。
 
-可复制 `examples/image-models.remote.example.json`，将 `replace-with-vision-model` 改为实际视觉模型名，设置 `FACADE_IMAGE_ENDPOINT` 和 `FACADE_IMAGE_API_KEY`。示例默认 `api_enabled=false`，不会因填写端点而自动允许外发。该示例只将 Generator 接到远程图像模型；另外两个离线角色保持 mock。
+可复制 `examples/image-models.remote.example.json`，设置 `FACADE_IMAGE_ENDPOINT` 和 `FACADE_IMAGE_API_KEY`。示例将三个角色映射至同一个 `gpt-6.1-sol` Responses 连接，使用 `reasoning_effort="medium"`；`expected_model` 校验服务返回的模型身份，可根据供应商真实响应调整。默认 `api_enabled=false`，不会因填写端点而自动允许外发。图像在线阶段使用 Generator，离线规则阶段使用 Reflector 与 Curator。配置声明不证明视觉可用，需显式执行 `vision-check`；本次未进行付费远端视觉验证。
 
 `examples/image-playbook.json` 是可读示例规则，具有稳定 ID 和版本。示例中的经验计数为 0，不把人工编写的初始规则包装成已经验证有效的沉淀经验。将规则文件作为 `--playbook` 传入后，本轮保存快照；下轮采用新规则需显式更换版本。
 
@@ -124,6 +126,8 @@ MCP 调用中的路径应填允许输入目录下的绝对路径或有效 artifa
 | `report.html` | 可读的检查报告，每个候选包括定位图和局部图 |
 | `result.json` | 原图坐标下的候选、合并来源及最终判断 |
 | `anchors.json` | 全图锚点及坐标索引 |
+| `expert_capabilities.json` | 本轮服务器专家能力与权重身份快照 |
+| `scene_context.json` | 自动 Env 上下文；不代表人工范围或像素 mask |
 | `observations.json` | 各模型/局部检查的原始候选观察 |
 | `trajectory.json` / `inspections.json` | 决策过程及局部执行记录 |
 | `playbook.json` | 本轮冻结的 P0 规则快照 |
@@ -138,7 +142,7 @@ MCP 调用中的路径应填允许输入目录下的绝对路径或有效 artifa
 
 ## 8. 当前阶段的限制
 
-- 主流程为单张图的框级检查，mask 分割与正式报告模板可复用既有模块另行衔接。
+- 主流程以单张图的框级核验为核心，注册分割专家可提供原尺寸 mask 证据；交互分割和指定正式报告模板仍通过原有独立模块使用。
 - 合成演示验证实现链路，不证明真实场景的召回或误报改善。
 - 两次局部检查是明确的预算上限，不保证覆盖所有可疑区域；证据不足时输出待定。
-- 本轮不自动训练模型、不在线更新 P0，也不把 Curator 提案自动晋升为已采用规则。
+- 本轮不训练模型、不在线更新 P0。离线验证发布要求独立人工参考、真实成对重放、模型/权重身份一致、达到门槛且有正向改善；mock、模拟 HTTP 或注入执行器不准晋升正式 P0。

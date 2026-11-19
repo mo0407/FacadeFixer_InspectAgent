@@ -59,6 +59,22 @@ def main():
     failure_summary.add_argument("--output",type=Path)
     failure_feedback = sub.add_parser("failure-feedback",help="提交带同任务证据的人工质量问题反馈")
     failure_feedback.add_argument("--config",type=Path,required=True)
+    rule_latest=sub.add_parser('rule-latest',help='查看已验证发布、供下一轮加载的P0')
+    for name in ('rule-propose','rule-validate','rule-cycle'):
+        lifecycle=sub.add_parser(name,help='离线生成/验证/发布规则；检查中不修改P0')
+        lifecycle.add_argument('--model-config',type=Path,required=True)
+        lifecycle.add_argument('--allow-api',action='store_true')
+        if name in ('rule-propose','rule-cycle'):
+            lifecycle.add_argument('--playbook',type=Path)
+            lifecycle.add_argument('--job-id',action='append')
+        if name in ('rule-validate','rule-cycle'):
+            lifecycle.add_argument('--dataset',type=Path,required=True)
+        if name=='rule-validate':
+            lifecycle.add_argument('--candidate',required=True)
+    vision_check=sub.add_parser('vision-check',help='用合成编号色块验证真实视觉与结构化动作能力')
+    vision_check.add_argument('--model-config',type=Path,required=True)
+    vision_check.add_argument('--output',type=Path)
+    vision_check.add_argument('--allow-api',action='store_true')
     review = sub.add_parser("review-cycle",help="运行一次三角色评审；不执行视频检测或自动调优")
     review.add_argument("--config",type=Path,required=True)
     review.add_argument("--request",type=Path,required=True)
@@ -116,8 +132,35 @@ def main():
         roots.append(args.output_dir.resolve())
     if args.command == "demo":
         roots.append(args.fixture_dir.resolve())
+    if args.command in ('rule-validate','rule-cycle'):
+        roots.append(args.dataset.resolve().parent)
     store = ArtifactStore(args.workspace,roots)
-    if args.command == "failure-summary":
+    if args.command=='rule-latest':
+        from .rule_lifecycle import RuleLifecycle
+        book=RuleLifecycle(store).latest()
+        result={'playbook':book.model_dump(mode='json') if book else None}
+    elif args.command in ('rule-propose','rule-validate','rule-cycle'):
+        from .rule_lifecycle import RuleLifecycle
+        from .model_gateway import ModelConfig
+        from .playbook import Playbook
+        lifecycle=RuleLifecycle(store)
+        settings=ModelConfig.model_validate_json(args.model_config.read_text(encoding='utf-8-sig'))
+        async def run_rules():
+            if args.command in ('rule-propose','rule-cycle'):
+                parent=Playbook.model_validate_json(args.playbook.read_text(encoding='utf-8-sig')) if args.playbook else None
+                proposal=await lifecycle.propose(settings,parent=parent,job_ids=args.job_id,allow_api=args.allow_api)
+                if args.command=='rule-propose':
+                    return proposal
+                candidate=proposal['candidate_playbook_path']
+            else:
+                candidate=args.candidate
+            return await lifecycle.validate_and_promote(candidate,str(args.dataset.resolve()),settings,allow_api=args.allow_api)
+        result=asyncio.run(run_rules())
+    elif args.command=='vision-check':
+        from .model_gateway import ModelConfig, validate_vision_connection
+        settings=ModelConfig.model_validate_json(args.model_config.read_text(encoding='utf-8-sig'))
+        result=asyncio.run(validate_vision_connection(settings,args.output or store.root/'vision-validation.json',allow_api=args.allow_api))
+    elif args.command == "failure-summary":
         from .failure_memory import FailureMemory
         memory=FailureMemory(store.root)
         result=memory.summary(job_id=args.job_id)
@@ -166,6 +209,7 @@ def main():
                 "FACADE_REPORT_REPO","FACADE_MASK_MODELS_CONFIG","FACADE_DETECTOR_URL","FACADE_DETECTOR_MODEL",
                 "FACADE_DETECTOR_PYTHON","FACADE_DETECTOR_WEIGHTS","FACADE_DETECTOR_DEVICE",
                 "FACADE_SOURCE_REPO","FACADE_SOURCE_PYTHON","FACADE_SOURCE_DEVICE","FACADE_SOURCE_TIMEOUT_SECONDS",
+                "FACADE_EXPERTS_CONFIG","FACADE_EXPERTS_ALLOWED_ROOTS",
                 "FACADE_SELECTOR_URL","FACADE_SELECTOR_MODEL",
                 "PYTHONPATH","PYTHONIOENCODING","FASTMCP_SHOW_SERVER_BANNER","FASTMCP_CHECK_FOR_UPDATES"}
         for server in result["mcpServers"].values():

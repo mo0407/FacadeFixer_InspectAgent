@@ -160,6 +160,7 @@ def test_runtime_and_evaluator_failures_are_distinct(tmp_path, monkeypatch, fail
         if failure_kind == "timeout":
             raise httpx.ReadTimeout("Fixture provider timeout", request=request)
         return httpx.Response(200, json={
+            "model":"fixture-version",
             "choices": [{"finish_reason": "stop", "message": {"content": "not valid JSON"}}],
         })
 

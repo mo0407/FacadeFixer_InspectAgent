@@ -6,6 +6,7 @@ import html
 import json
 import math
 import shutil
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -44,6 +45,8 @@ class ImageInspectionRequest(Strict):
     inference_size: int | None = Field(default=960, ge=320, le=1536)
     max_candidates: int = Field(default=200, ge=1, le=1000)
     context_regions: list[ContextRegion] = Field(default_factory=list, max_length=30)
+    context_mode: Literal['auto','manual','none'] = 'auto'
+    expert_class_filters: dict[str,list[str]] = Field(default_factory=dict)
 
     @model_validator(mode='after')
     def settings(self):
@@ -51,8 +54,13 @@ class ImageInspectionRequest(Strict):
             raise ValueError('low_threshold must not exceed high_threshold')
         if len(set(self.detector_profiles)) != len(self.detector_profiles):
             raise ValueError('Detector profiles must be unique')
-        if not set(self.detector_profiles) <= set(EXPERT_PROFILES):
-            raise ValueError('Unknown or non-detection expert profile')
+        if any(not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',name) for name in self.detector_profiles):
+            raise ValueError('Invalid expert profile name')
+        if not set(self.expert_class_filters) <= set(self.detector_profiles):
+            raise ValueError('Class filters must reference configured experts')
+        if any(not codes or len(codes)!=len(set(codes)) or not set(codes)<=set(IMAGE_CLASSES)
+               for codes in self.expert_class_filters.values()):
+            raise ValueError('Expert filters require unique supported business classes')
         if self.inference_size is not None and self.inference_size % 32:
             raise ValueError('inference_size must be a multiple of 32')
         if len({region.id for region in self.context_regions}) != len(self.context_regions):
@@ -89,6 +97,171 @@ class FinalReview(Strict):
     decisions: list[CandidateDecision]
     summary: str = Field(min_length=1, max_length=3000)
     used_rule_ids: list[str] = Field(default_factory=list)
+
+
+class SceneRegion(Strict):
+    bbox_normalized: tuple[float,float,float,float]
+    role: Literal['target_wall','window','door','exterior_stair','background','context']
+    description: str = Field(min_length=1,max_length=300)
+
+    @model_validator(mode='after')
+    def valid_geometry(self):
+        x1,y1,x2,y2=self.bbox_normalized
+        if not all(math.isfinite(v) for v in self.bbox_normalized) or not (0<=x1<x2<=1 and 0<=y1<y2<=1):
+            raise ValueError('Scene regions must use normalized XYXY within [0,1]')
+        return self
+
+
+class SceneContext(Strict):
+    regions: list[SceneRegion] = Field(default_factory=list,max_length=30)
+    summary: str = Field(min_length=1,max_length=1500)
+
+
+def _capabilities(request, provided):
+    """Server capabilities define eligibility; caller filters can only narrow it."""
+    if provided is None:
+        if not set(request.detector_profiles)<=set(EXPERT_PROFILES):
+            raise ValueError('Registered experts require server capability discovery')
+        entries={name:{'class_codes':list(IMAGE_CLASSES),'full_image':True,'local_eligible':True,
+                       'ready':True,'identity_verified':False} for name in request.detector_profiles}
+    else:
+        entries=provided.get('profiles',{})
+    selected={}
+    for name in request.detector_profiles:
+        if name not in entries or not entries[name].get('ready',False):
+            raise ValueError('Expert unavailable in server capabilities: '+name)
+        item=dict(entries[name])
+        codes=set(item.get('class_codes',[]))
+        if not codes or not codes<=set(IMAGE_CLASSES):
+            raise ValueError('Expert must declare supported business classes: '+name)
+        item['declared_class_codes']=sorted(codes)
+        if name in request.expert_class_filters:
+            codes &= set(request.expert_class_filters[name])
+        item['class_codes']=sorted(codes)
+        if not codes:
+            raise ValueError('Expert filter removed all supported classes: '+name)
+        selected[name]=item
+    if not any(item.get('full_image',True) for item in selected.values()):
+        raise ValueError('At least one expert must support full-image detection')
+    return selected
+
+
+def _eligible(anchor, capabilities, mask):
+    if anchor.get('scope_role') in ('window','door','exterior_stair','background'):
+        return []
+    if mask is not None and _scope(anchor['bbox_xyxy'],mask)['status']=='outside':
+        return []
+    code=anchor.get('class_code')
+    return [name for name,item in capabilities.items() if item.get('local_eligible',True)
+            and (code not in IMAGE_CLASSES or code in item['class_codes'])]
+
+
+def _weight_identity(provenance):
+    members=provenance.get('models',[])
+    if members:
+        return {member.get('profile',str(index)):member['weights_sha256'] for index,member in enumerate(members)
+                if member.get('weights_sha256')}
+    value=provenance.get('weights_sha256') or provenance.get('checkpoint_sha256')
+    if isinstance(value,dict):
+        return value
+    return {'checkpoint':value} if value else {}
+
+
+def _implementation_identity(provenance):
+    keys=('backend','task','library','library_version','source_files_sha256','implementation_sha256','worker_sha256','source_integration')
+    payload={key:provenance[key] for key in keys if key in provenance}
+    if provenance.get('models'):
+        payload['models']={member.get('profile',str(index)):{key:member[key] for key in keys if key in member}
+                           for index,member in enumerate(provenance['models'])}
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest() if payload else None
+
+
+def _definition_identity(capability):
+    digest=capability.get('definition_sha256')
+    if digest is not None:
+        if not isinstance(digest,str) or not re.fullmatch('[a-f0-9]{64}',digest):
+            raise ValueError('Invalid expert definition identity')
+        return digest
+    # Explicitly injected test/demo experts have no server implementation files.
+    payload={key:capability.get(key) for key in ('backend','task','class_map','class_codes','full_image','local_eligible')}
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False,allow_nan=False).encode()).hexdigest()
+
+
+def _lock_expert(profile, provenance, locks, capability, strict, implementation_locks=None):
+    identity=_weight_identity(provenance)
+    if not identity:
+        if strict:
+            raise ValueError('Expert checkpoint identity missing: '+profile)
+        return
+    if any(not isinstance(value,str) or not re.fullmatch('[a-f0-9]{64}',value) for value in identity.values()):
+        raise ValueError('Invalid expert checkpoint identity')
+    declared=capability.get('weights_sha256') or capability.get('checkpoint_sha256')
+    if declared:
+        matches=identity==declared if isinstance(declared,dict) else len(identity)==1 and next(iter(identity.values()))==declared
+        if not matches:
+            raise ValueError('Expert checkpoint changed since capability snapshot: '+profile)
+    if profile in locks and locks[profile]!=identity:
+        raise ValueError('Expert checkpoint changed during image inspection: '+profile)
+    locks[profile]=identity
+    definition=capability.get('definition_sha256')
+    if definition and provenance.get('definition_sha256')!=definition:
+        raise ValueError('Expert checkpoint changed: definition differs from frozen capability: '+profile)
+    implementation=_implementation_identity(provenance)
+    if strict and not implementation:
+        raise ValueError('Expert implementation identity missing: '+profile)
+    if implementation_locks is not None and implementation:
+        if profile in implementation_locks and implementation_locks[profile]!=implementation:
+            raise ValueError('Expert checkpoint changed: implementation drifted during inspection: '+profile)
+        implementation_locks[profile]=implementation
+
+
+def _candidate_anchor(candidate, request, source='expert'):
+    return {'id':candidate['observation_id'], 'kind':'Box' if candidate['confidence'] is not None
+            and candidate['confidence']>=request.high_threshold else 'Ghost',
+            'bbox_xyxy':candidate['bbox_xyxy'],'class_code':candidate['class_code'],
+            'confidence':candidate['confidence'],'source':source}
+
+
+async def _environment(request, source, mask, vlm, p0, folder):
+    regions=[]
+    if request.context_mode=='none':
+        return regions
+    if request.context_mode=='auto':
+        if mask is not None:
+            import cv2
+            count,_,stats,_=cv2.connectedComponentsWithStats((mask>0).astype('uint8'),connectivity=8)
+            components=sorted(stats[1:],key=lambda item:int(item[4]),reverse=True)[:20]
+            for index,item in enumerate(components):
+                x,y,w,h,area=map(int,item)
+                if area:
+                    regions.append({'id':f'env-scope-{index+1:02d}','kind':'Env','bbox_xyxy':[x,y,x+w,y+h],
+                        'scope_role':'target_wall','description':'Wall component from the provided scope mask.',
+                        'source':'scope_mask'})
+            summary='Wall context extracted from authoritative scope-mask components.'
+        else:
+            path=folder/'scene-input.png'
+            preview=source.copy(); preview.thumbnail((1280,1280)); preview.save(path)
+            task={'stage':'visual_anchoring','p0':p0,'original_size':list(source.size),
+                  'instruction':'Identify visible target-building wall context and relevant windows, doors, exterior stairs '
+                    'and background buildings. Return normalized XYXY regions. Regions are context cues, not pixel masks '
+                    'or confirmed defects. If target building is ambiguous, use role context and explain uncertainty.'}
+            context=await vlm.invoke('generator',task,SceneContext,image_paths=[path],mock_output={
+                'regions':[{'bbox_normalized':[0,0,1,1],'role':'context',
+                            'description':'Mock full-image reference; no semantic wall judgment.'}],
+                'summary':'Mock context only; semantic scene recognition has not been performed.'})
+            for index,item in enumerate(context.regions):
+                x1,y1,x2,y2=item.bbox_normalized
+                box=[math.floor(x1*source.width),math.floor(y1*source.height),math.ceil(x2*source.width),math.ceil(y2*source.height)]
+                regions.append({'id':f'env-auto-{index+1:02d}','kind':'Env','bbox_xyxy':box,
+                                'scope_role':item.role,'description':item.description,'source':'vlm_scene_context'})
+            summary=context.summary
+        ArtifactStore.write_json(folder/'scene_context.json',{'summary':summary,'regions':regions,'is_scope_mask':False})
+    for region in request.context_regions:
+        if any(item['id']==region.id for item in regions):
+            raise ValueError('Manual context ID collides with automatic context')
+        regions.append({'id':region.id,'kind':'Env','bbox_xyxy':validate_box(region.bbox_xyxy,*source.size),
+                        'description':region.description,'source':'manual_context'})
+    return regions
 
 
 def validate_box(box, width, height):
@@ -171,9 +344,11 @@ def _overview(source, anchors, destination):
     return {'width': image.width, 'height': image.height, 'scale_x': sx, 'scale_y': sy}
 
 
-async def _detect(gateway, path, profile, request, origin, source_shape, prefix, scope_mask, folder, source_hash):
+async def _detect(gateway, path, profile, request, origin, source_shape, prefix, scope_mask, folder, source_hash,
+                  *, capabilities=None, locks=None, strict_identity=False, implementation_locks=None):
     arguments = {'image_paths': [str(path)], 'model_profile': profile, 'threshold': request.low_threshold}
-    if request.inference_size is not None and profile in ('yolo11m', 'yolo12m'):
+    backend=(capabilities or {}).get(profile,{}).get('backend')
+    if request.inference_size is not None and (profile in ('yolo11m', 'yolo12m') or backend in ('ultralytics','yolov9')):
         arguments['inference_size'] = request.inference_size
     response = await gateway.call('facade_models_detect', arguments)
     ArtifactStore.write_json(folder / f'{prefix}-expert.json', response)
@@ -188,6 +363,10 @@ async def _detect(gateway, path, profile, request, origin, source_shape, prefix,
         width, height = crop.size
     if image.get('source_sha256') != sha256(path) or (image.get('width'), image.get('height')) != (width, height):
         raise ValueError('Expert result source hash/dimensions mismatch')
+    provenance=image.get('model_provenance',{})
+    if locks is not None:
+        _lock_expert(profile,provenance,locks,(capabilities or {}).get(profile,{}),strict_identity,implementation_locks)
+        ArtifactStore.write_json(folder/'expert-lock.json',{'identities':locks,'implementations':implementation_locks,'strict':strict_identity})
     rows = image.get('defects', []) + image.get('unmapped_defects', [])
     candidates = []
     for index, row in enumerate(rows):
@@ -198,13 +377,17 @@ async def _detect(gateway, path, profile, request, origin, source_shape, prefix,
         if score is not None and (isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score) or not 0 <= score <= 1):
             raise ValueError('Invalid expert confidence')
         code = _canonical_code(row)
+        if capabilities is not None and code in IMAGE_CLASSES and code not in capabilities[profile]['declared_class_codes']:
+            raise ValueError('Expert returned an undeclared business class: '+profile)
         candidates.append({'observation_id': f'{prefix}-{index+1:04d}', 'class_code': code,
             'class_name': IMAGE_CLASSES.get(code, '待映射类别'), 'source_class_code': row.get('original_class_code', row.get('class_code')),
             'source_class_name': row.get('original_class_name', row.get('class_name')), 'source_instance_id': row.get('instance_id'),
             'bbox_xyxy': mapped, 'local_bbox_xyxy': box, 'crop_origin_xy': list(origin),
             'confidence': score, 'model_profile': profile, 'evidence_id': prefix,
             'evidence_image_sha256': sha256(path), 'source_sha256': source_hash,
-            'scope': _scope(mapped, scope_mask)})
+            'scope': _scope(mapped, scope_mask),
+            'expert_mask_evidence':row.get('mask_artifact'),
+            'model_identity':_weight_identity(provenance)})
     return candidates
 
 
@@ -243,10 +426,15 @@ def _html_report(folder, result):
 
 
 async def execute_image_inspection(request: ImageInspectionRequest, store: ArtifactStore, experts,
-                                   vlm: ModelGateway, playbook: Playbook, folder: Path, *, demo=False):
+                                   vlm: ModelGateway, playbook: Playbook, folder: Path, *, demo=False, expert_capabilities=None):
     """One still image; no video extraction, temporal fusion, or online rule changes."""
     from .image_failures import progress
     progress(folder,'preflight',playbook_version=playbook.version)
+    capabilities=_capabilities(request,expert_capabilities)
+    strict_identity=expert_capabilities is not None
+    locks={}
+    implementation_locks={}
+    store.write_json(folder/'expert_capabilities.json',{'profiles':capabilities,'discovered':strict_identity})
     # Fail before expensive expert inference if the VLM connection cannot be used.
     if hasattr(vlm, 'config'):
         connection = vlm.config.connections[vlm.config.roles['generator']]
@@ -297,50 +485,54 @@ async def execute_image_inspection(request: ImageInspectionRequest, store: Artif
     store.write_json(folder/'request.json', request.model_dump(mode='json'))
     candidates, anchors, trajectory, inspections = [], [], [], []
     for index, profile in enumerate(request.detector_profiles):
+        if not capabilities[profile].get('full_image',True):
+            continue
         progress(folder,'full_detection',model_profile=profile,source_sha256=source_hash,step=index+1)
         found = await _detect(experts, folder/'source.png', profile, request, (0,0), source.size,
-                              f'full-{index+1:02d}', mask, folder, source_hash)
+                              f'full-{index+1:02d}', mask, folder, source_hash,
+                              capabilities=capabilities,locks=locks,strict_identity=strict_identity,implementation_locks=implementation_locks)
         candidates.extend(found)
     progress(folder,'anchor_preparation',source_sha256=source_hash)
     if len(candidates) > request.max_candidates:
         raise ValueError('Candidate budget exceeded; nothing silently discarded')
     for candidate in candidates:
-        anchors.append({'id': candidate['observation_id'], 'kind': 'Box' if candidate['confidence'] is not None
-                        and candidate['confidence'] >= request.high_threshold else 'Ghost',
-                        'bbox_xyxy': candidate['bbox_xyxy'], 'class_code': candidate['class_code'],
-                        'confidence': candidate['confidence']})
-    for region in request.context_regions:
-        anchors.append({'id': region.id, 'kind': 'Env', 'bbox_xyxy': validate_box(region.bbox_xyxy,width,height),
-                        'description': region.description})
+        anchors.append(_candidate_anchor(candidate,request))
+    progress(folder,'visual_anchoring',source_sha256=source_hash)
+    anchors.extend(await _environment(request,source,mask,vlm,p0,folder))
     for row in range(request.grid_rows):
         for col in range(request.grid_cols):
             anchors.append({'id': f'grid-{row+1}-{col+1}', 'kind': 'Grid',
                 'bbox_xyxy': [col*width//request.grid_cols, row*height//request.grid_rows,
                               (col+1)*width//request.grid_cols, (row+1)*height//request.grid_rows]})
+    for anchor in anchors:
+        anchor['eligible_profiles']=_eligible(anchor,capabilities,mask)
     display = _overview(source, anchors, folder/'overview.png')
+    shutil.copyfile(folder/'overview.png',folder/'overview-00.png')
     store.write_json(folder/'anchors.json', {'coordinate_space':'original_pixels','display':display,'anchors':anchors})
+    store.write_json(folder/'anchors-initial.json',anchors)
     by_id = {anchor['id']:anchor for anchor in anchors}
-    evidence_paths = [folder/'overview.png']
+    evidence_paths = [folder/'overview-00.png']
     common = {'workflow': 'image-active-inspection/v1', 'p0': p0,
         'original_size': [width,height], 'coordinate_space':'zero_based_xyxy_max_exclusive',
         'scope_policy': 'Only main-building wall surfaces; exclude doors, windows, exterior stairs and background buildings. '
                         'A provided scope mask is authoritative; without it scope remains unverified.',
         'class_schema': IMAGE_CLASSES, 'allowed_profiles': request.detector_profiles,
         'scale_meaning': '1,2,3 expand anchor context; crops use original pixels without resizing.',
-        'anchors': anchors, 'overview_display': display}
+        'anchors': anchors, 'overview_display': display,'expert_capabilities':capabilities}
     for step in range(request.max_inspections):
         task = {**common, 'stage':'choose_inspection', 'remaining_inspections': request.max_inspections-step,
             'history': trajectory, 'candidates': candidates,
-            'images': ['overview.png']+[i['annotated_crop'] for i in inspections],
+            'images': [evidence_paths[0].name]+[i['annotated_crop'] for i in inspections],
             'instruction': 'Choose one inspect action by existing anchor ID and allowed expert profile, or finish. '
                            'Inspect unexplored grid areas too when experts may have missed defects. '
                            'Return only the action schema; do not invent new tools, coordinates, or rules.'}
-        grids = [a['id'] for a in anchors if a['kind'] == 'Grid']
-        fixture = {'action':'inspect','anchor_id':grids[step % len(grids)],
-                   'model_profile':request.detector_profiles[0], 'scale':1,
-                   'reason':'Mock demonstration of a bounded grid inspection; not a model judgment.', 'used_rule_ids':[]}
+        grids = [a['id'] for a in anchors if a['kind'] == 'Grid' and a['eligible_profiles']]
         if step >= len(grids):
             fixture = {'action':'finish','reason':'Mock exhausted available unique grid actions.','used_rule_ids':[]}
+        else:
+            fixture = {'action':'inspect','anchor_id':grids[step],
+                       'model_profile':by_id[grids[step]]['eligible_profiles'][0], 'scale':1,
+                       'reason':'Mock demonstration of a bounded grid inspection; not a model judgment.', 'used_rule_ids':[]}
         progress(folder,'choose_inspection',step=step+1,source_sha256=source_hash)
         action = await vlm.invoke('generator', task, InspectionAction, mock_output=fixture, image_paths=evidence_paths)
         progress(folder,'inspection_action_validation',step=step+1,source_sha256=source_hash)
@@ -352,6 +544,8 @@ async def execute_image_inspection(request: ImageInspectionRequest, store: Artif
             break
         if action.anchor_id not in by_id or action.model_profile not in request.detector_profiles:
             raise ValueError('Invalid anchor or expert profile from VLM')
+        if action.model_profile not in by_id[action.anchor_id]['eligible_profiles']:
+            raise ValueError('Expert is not eligible for this anchor class or scope')
         signature = (action.anchor_id, action.model_profile, action.scale)
         if any(tuple(i['signature']) == signature for i in inspections):
             raise ValueError('Duplicate inspection action')
@@ -363,8 +557,21 @@ async def execute_image_inspection(request: ImageInspectionRequest, store: Artif
         crop.save(crop_path)
         progress(folder,'local_detection',step=step+1,model_profile=action.model_profile,source_sha256=source_hash)
         found = await _detect(experts,crop_path,action.model_profile,request,bounds[:2],source.size,
-                              prefix,mask,folder,source_hash)
+                              prefix,mask,folder,source_hash,capabilities=capabilities,locks=locks,strict_identity=strict_identity,
+                              implementation_locks=implementation_locks)
         candidates.extend(found)
+        for candidate in found:
+            anchor=_candidate_anchor(candidate,request,source=prefix)
+            anchor['eligible_profiles']=_eligible(anchor,capabilities,mask)
+            anchors.append(anchor)
+            by_id[anchor['id']]=anchor
+        display=_overview(source,anchors,folder/'overview.png')
+        snapshot=folder/f'overview-{len(inspections)+1:02d}.png'
+        shutil.copyfile(folder/'overview.png',snapshot)
+        evidence_paths[0]=snapshot
+        common['overview_display']=display
+        store.write_json(folder/'anchors.json',{'coordinate_space':'original_pixels','display':display,'anchors':anchors})
+        store.write_json(folder/f'anchors-after-{len(inspections)+1:02d}.json',anchors)
         if len(candidates) > request.max_candidates:
             raise ValueError('Candidate budget exceeded; nothing silently discarded')
         annotated = folder/f'{prefix}-annotated.png'
@@ -446,6 +653,11 @@ async def execute_image_inspection(request: ImageInspectionRequest, store: Artif
         'source_size':[width,height],'exif_orientation':orientation,'exif_rotation_applied':False,
         'coordinate_space':'original_pixels','bbox_convention':'zero_based_xyxy_max_exclusive',
         'scope_mask_sha256':scope_hash,'scope_verified_by_mask':mask is not None,
+        'expert_identities':locks,'expert_identity_verified':strict_identity,
+        'expert_config_identities':{name:item.get('weights_sha256') for name,item in capabilities.items()},
+        'expert_definition_identities':{name:_definition_identity(item) for name,item in capabilities.items()},
+        'expert_implementation_identities':implementation_locks,
+        'vlm_model_identities':getattr(vlm,'model_identities',{}),
         'playbook_version':frozen.version,'playbook_sha256':p0_hash,'playbook_updated':False,
         'inspections_used':len(inspections),'trajectory':trajectory,'inspections':inspections,
         'merge_method':'greedy same-class IoU; highest-score representative; all member observations retained',
@@ -466,11 +678,13 @@ async def run_image_inspection(request, store, settings: ModelConfig, playbook=N
     """Real runs use MCP stdio experts; tests/demo can inject deterministic experts."""
     from .orchestration import ToolGateway, server_config
     from .image_failures import progress, record_observations, record_runtime_failure
-    playbook = playbook or Playbook(version='P0-empty')
+    from .rule_lifecycle import RuleLifecycle
     job,folder = store.create_job('image_inspection',request.model_dump(mode='json'))
     vlm = ModelGateway(settings,allow_api=allow_api)
     # Contains model parameters and environment VARIABLE NAMES, never credentials.
     try:
+        progress(folder,'playbook_load')
+        playbook = playbook or RuleLifecycle(store).latest() or Playbook(version='P0-empty')
         store.write_json(folder/'model-config.json',settings.model_dump(mode='json'))
         store.write_json(folder/'request.json',request.model_dump(mode='json'))
         if experts is None:
@@ -480,7 +694,9 @@ async def run_image_inspection(request, store, settings: ModelConfig, playbook=N
             config = server_config(store.root,store.allowed_input_roots)
             config['mcpServers'] = {'model':config['mcpServers']['model']}
             async with MCPAdapter(MCPConfigTransport(config,name_as_prefix=False)) as adapter:
-                result = await execute_image_inspection(request,store,ToolGateway(await adapter.list_tools(),folder/'tool_calls.jsonl'),vlm,playbook,folder)
+                gateway=ToolGateway(await adapter.list_tools(),folder/'tool_calls.jsonl')
+                discovered=await gateway.call('facade_models_capabilities',{})
+                result = await execute_image_inspection(request,store,gateway,vlm,playbook,folder,expert_capabilities=discovered)
         else:
             result = await execute_image_inspection(request,store,experts,vlm,playbook,folder,demo=True)
         store.write_json(folder/'model_trace.json',vlm.trace)

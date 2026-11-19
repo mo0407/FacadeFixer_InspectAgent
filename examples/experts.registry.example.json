@@ -1,0 +1,33 @@
+{
+  "profiles": {
+    "yolo9e_cubit": {
+      "backend": "yolov9",
+      "task": "segment",
+      "repo_path": "server-assets/yolov9/REPLACE_WITH_LOCAL_SOURCE_CHECKOUT",
+      "python_path": "server-assets/yolov9/runtime/Scripts/python.exe",
+      "weights_path": "server-assets/yolov9/weights/REPLACE_WITH_TRAINED_CHECKPOINT.pt",
+      "class_map": {
+        "REPLACE_WITH_ACTUAL_CRACK_LABEL": "C",
+        "REPLACE_WITH_ACTUAL_SPALLING_LABEL": "S"
+      },
+      "class_codes": ["C", "S"],
+      "local_eligible": true,
+      "full_image": true,
+      "reference_name": "配置格式示例；名称不证明已安装或已验证 CUBIT 训练权重"
+    },
+    "yolo11_seg_custom": {
+      "backend": "ultralytics",
+      "task": "segment",
+      "python_path": "server-assets/ultralytics/runtime/Scripts/python.exe",
+      "weights_path": "server-assets/ultralytics/weights/REPLACE_WITH_TRAINED_CHECKPOINT.pt",
+      "class_map": {
+        "REPLACE_WITH_ACTUAL_CRACK_LABEL": "C",
+        "REPLACE_WITH_ACTUAL_BULGING_LABEL": "B"
+      },
+      "class_codes": ["C", "B"],
+      "local_eligible": true,
+      "full_image": true,
+      "reference_name": "自有 Ultralytics 分割专家格式示例；类别映射必须按实际 checkpoint 替换"
+    }
+  }
+}

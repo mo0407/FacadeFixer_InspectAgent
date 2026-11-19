@@ -20,9 +20,16 @@ flowchart LR
     G -->|结束 / 达到最多两次局部检查| M[原图坐标回映 + 同类框去重]
     M --> V[VLM 最终逐项复核]
     V --> R[保留 / 拒绝 / 待定 + 可追溯结果]
+    R --> H[失败记录与有证据反馈]
+    H --> F[离线复盘与规则提案]
+    F --> T[独立参考集成对验证]
+    T -->|通过门槛且正向改善| N[发布下一版 P0]
+    N --> P
 ```
 
-同一轮内使用同一份 P0，不在检测途中修改规则。Generator 是本轮的视觉检查者；Reflector、Curator 可沿用既有离线评审接口，为下一版规则准备复盘和候选增量。图中的 YOLOv9e-seg 并未预装，本版通过配置选用已有模型，示例为 `yolo11m` 与 `yolo12m`。
+同一轮内使用同一份 P0，不在检测途中修改规则。Generator 负责本轮视觉检查；Reflector、Curator 在离线阶段整理有证据的失败与规则候选。候选通过独立参考集的真实成对重放、质量门槛和正向改善检验后，才能发布为下一轮默认加载的 P0；mock 或注入的测试执行器不能晋升正式规则。
+
+已增加 YOLOv9 分割与 Ultralytics 自定义检测/分割的注册适配器；CUBIT 权重与训练数据需自行提供，尚未进行真实 CUBIT 权重验收。内置示例继续使用 `yolo11m` 与 `yolo12m`。完整步骤见 [图像检查与离线规则闭环](docs/complete-image-workflow.md)。
 
 ## 快速开始
 
@@ -70,6 +77,14 @@ facade-image --workspace workspace image-inspect --config examples/image-inspect
 
 真实 VLM 可从 [image-models.remote.example.json](examples/image-models.remote.example.json) 开始配置，格式沿用 [三角色模型网关](docs/model-gateway-v1.md)：连接可选择 `chat_completions` 或 `responses`，图像连接必须设 `supports_images=true`。端点和密钥通过环境变量读取，配置文件不保存密钥。使用远程 VLM 会向该服务商发送本轮图片证据、候选信息和规则手册。
 
+远程示例将三个角色连接到 `gpt-6.1-sol` Responses，使用 `reasoning_effort="medium"` 和 `expected_model` 响应模型校验，默认关闭 API。配置声明不证明供应商视觉能力，可以显式运行 `vision-check` 验证图像读取与结构化动作；本次开发未进行付费远程视觉测试。
+
+## 注册自己的专家
+
+参考 [专家注册示例](examples/experts.registry.example.json)，通过服务器环境变量 `FACADE_EXPERTS_CONFIG` 指向注册 JSON。权重、源码和解释器路径仅允许位于配置文件父目录或 `FACADE_EXPERTS_ALLOWED_ROOTS` 指定的服务器目录内。MCP 调用者选择 profile，不能在工具参数中传入任意权重或可执行文件。
+
+每个专家声明 `class_map`、`class_codes`、全图/局部资格和任务类型。流程按能力筛选并锁定本轮实际权重哈希；局部发现会形成新的可检查锚点。注册分割专家可输出原尺寸 mask 证据。B 鼓包已补充业务映射，支持它的模型可执行通用分割；OpenCV 基线明确拒绝 B。
+
 ## 作为 MCP 使用
 
 安装后可启动 `facade-image-mcp`，或直接执行 `python -m facade_mcp.image_server`，以 stdio 方式接入支持 MCP 的客户端。高层工具 `facade_image_inspect` 接收 `request` 对象、`model_config_path`、可选的 `playbook_path` 和默认关闭的 `allow_api`。本地专家检测继续通过已有 model MCP 调用。
@@ -86,7 +101,7 @@ facade-image --workspace workspace image-inspect --config examples/image-inspect
 - 可以提供与原图等尺寸的二值墙面范围 mask，将门、窗、外楼梯和背景排除。未提供范围 mask 时，不应把检测结果视为已经完成人工范围复核。
 - 没有独立人工真值时，不输出准确率、召回率或“已达标”的结论。合成演示只验证程序行为。
 
-参数、输入输出约定及当前限制见 [图像工作流说明](docs/image-workflow.md)。原有视频、分割、报告、评审与看板模块保留在副本中，便于继续复用；本轮新增主流程聚焦图像锚点与框级主动检查。
+参数、输入输出约定及当前限制见 [图像工作流说明](docs/image-workflow.md)。主流程以框级主动核验为核心，注册分割专家可提供 mask 证据；原有视频、交互分割、正式报告模板与 Web 模块保留供独立使用。
 
 ## 失败记录与同因统计
 
@@ -98,6 +113,15 @@ facade-image --workspace workspace failure-feedback --config examples/image-feed
 ```
 
 反馈示例中的任务 ID 和证据文件须替换为本地真实产物。重复原因采用固定代码聚合，同一事件幂等提交不重复计数；规则不会因此自动更新，也不会触发付费重跑。详见 [失败记忆说明](docs/failure-memory.md)。
+
+## 离线验证与规则发布
+
+```powershell
+facade-image --workspace workspace rule-latest
+facade-image --workspace workspace rule-propose --model-config examples/image-models.remote.example.json --allow-api
+```
+
+提案不等于发布。准备独立人工参考集后，可用 `rule-validate` 对指定候选做真实成对重放，或显式运行 `rule-cycle` 完成一次提案与验证。格式见 [验证数据集示例](examples/rule-validation.example.json)，其中图片和标注仅为占位格式，不能直接用作真值。命令参数和发布门槛见 [完整流程](docs/complete-image-workflow.md)。`image-inspect` 默认加载已验证发布的最新版 P0，显式 `--playbook` 可覆盖；单轮执行继续冻结该快照。
 
 ## 测试
 

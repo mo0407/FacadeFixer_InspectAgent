@@ -17,7 +17,9 @@ def test_image_mcp_tool_registered():
         async with Client(server) as client:
             tools = await client.list_tools()
             by_name = {tool.name:tool for tool in tools}
-            assert {'facade_image_inspect','facade_image_failure_summary','facade_image_record_feedback'} == set(by_name)
+            assert {'facade_image_inspect','facade_image_failure_summary','facade_image_record_feedback',
+                    'facade_image_rules_latest','facade_image_rule_propose','facade_image_rule_validate',
+                    'facade_image_rule_cycle','facade_image_validate_vision'} == set(by_name)
             schema = by_name['facade_image_inspect'].input_schema
             assert set(schema['required']) == {'request', 'model_config_path'}
     asyncio.run(check())

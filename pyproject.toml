@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "facade-image-inspection"
-version = "0.2.0"
+version = "0.3.0"
 description = "Image-first facade active inspection with frozen playbooks and bounded MCP tools"
 requires-python = ">=3.11"
 dependencies = [

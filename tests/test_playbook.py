@@ -61,7 +61,7 @@ def test_context_reaches_all_roles_and_refs_are_structured(tmp_path,monkeypatch)
             {'insights':[], 'rule_feedback':[{'rule_id':'sampling-00001','tag':'neutral','evidence_ids':['e1'],'reason':'pending evidence'}]},
             {'candidates':[]},
         ]
-        return httpx.Response(200,json={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(outputs[len(seen)-1])}}]})
+        return httpx.Response(200,json={'model':'fixture-version','choices':[{'finish_reason':'stop','message':{'content':json.dumps(outputs[len(seen)-1])}}]})
     result=asyncio.run(run_review(config(True),request(),tmp_path,playbook=snapshot(),
                                  allow_api=True,transport=httpx.MockTransport(handler)))
     folder=Path(result['output'])

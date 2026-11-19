@@ -28,6 +28,15 @@ def create_server(service: ModelService | None = None, store: ArtifactStore | No
     server = FastMCP("FacadeFixer Local Models")
 
     @server.tool()
+    def facade_models_capabilities() -> dict:
+        """Read server-owned expert capabilities and checkpoint hashes without inference.
+
+        Includes builtin and FACADE_EXPERTS_CONFIG profiles. Missing assets remain
+        not ready; file readiness does not prove successful model loading.
+        """
+        return service.capabilities()
+
+    @server.tool()
     def facade_models_list() -> dict:
         """Inspect server-managed local detection/segmentation profiles and readiness.
 
@@ -46,7 +55,7 @@ def create_server(service: ModelService | None = None, store: ArtifactStore | No
         job state and artifacts. Confidence is not accuracy or human approval.
         """
         size_options = {'inference_size': inference_size} if inference_size is not None else {}
-        return service.detect(image_paths, model_profile=model_profile, threshold=threshold, **size_options)
+        return _tool_result(service.detect(image_paths, model_profile=model_profile, threshold=threshold, **size_options))
 
     @server.tool()
     def facade_models_segment(image_path: str, defects: list[dict], model_profile: str = "mobile_sam",

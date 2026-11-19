@@ -173,7 +173,7 @@ def test_no_image_input_keeps_text_payload_compatible(monkeypatch, paths):
         payload = json.loads(request.content)
         assert isinstance(payload["messages"][1]["content"], str)
         assert json.loads(payload["messages"][1]["content"]) == {"instruction": "检查墙面"}
-        return httpx.Response(200, json={"choices": [
+        return httpx.Response(200, json={"model": "fixture-version", "choices": [
             {"finish_reason": "stop", "message": {"content": '{"answer":"ok"}'}}]})
 
     gateway = ModelGateway(config("chat_completions", supports_images=False), allow_api=True,

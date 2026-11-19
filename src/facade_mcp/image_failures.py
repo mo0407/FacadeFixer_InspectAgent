@@ -44,7 +44,7 @@ def classify(error, folder, model_trace):
     stage = state['stage']
     trace = model_trace[-1] if model_trace else {}
     # Only the most recent operation's trace may explain the current failure.
-    if stage in ('choose_inspection','final_verification','review_generator','review_reflector','review_curator') and trace.get('status') != 'completed':
+    if stage in ('visual_anchoring','choose_inspection','final_verification','review_generator','review_reflector','review_curator') and trace.get('status') != 'completed':
         code = trace.get('error_code')
         if code in REASONS and REASONS[code]['kind'] == 'runtime':
             return code,state
@@ -61,6 +61,8 @@ def classify(error, folder, model_trace):
         tool = _last_tool(folder)
         if tool.get('status') == 'failed':
             code = tool.get('output',{}).get('error',{}).get('code')
+            if code == 'EXPERT_DEFINITION_CHANGED':
+                return 'model_version_changed',state
             if code == 'WEIGHTS_NOT_FOUND':
                 return 'model_weights_missing',state
             if code in ('SOURCE_REPO_NOT_FOUND','SOURCE_PYTHON_NOT_FOUND','INVALID_DEVICE','INVALID_TIMEOUT'):
@@ -77,9 +79,15 @@ def classify(error, folder, model_trace):
     # These are exact errors owned by our harness, not raw exception text saved
     # to the ledger. Known observed failures get stable catalog summaries.
     message = str(error)
+    if message.startswith('Expert checkpoint changed'):
+        return 'model_version_changed',state
+    if message.startswith('Expert unavailable'):
+        return 'expert_unavailable',state
+    if message.startswith('Expert is not eligible'):
+        return 'invalid_inspection_action',state
     if message.startswith('Candidate budget exceeded'):
         return 'candidate_budget_exceeded',state
-    if message.startswith('Frozen P0 changed'):
+    if message.startswith(('Frozen P0 changed','Published P0')):
         return 'playbook_changed',state
     if message.startswith(('Source changed','Source pixels changed','Scope input changed','Expert result source hash')):
         return 'source_changed',state
@@ -110,7 +118,7 @@ def record_runtime_failure(store, folder, error, model_trace):
     config = _read(folder/'model-config.json',_read(folder/'config.json',{}))
     connection = config.get('connections',{}).get(config.get('roles',{}).get('generator'),{})
     playbook = _read(folder/'playbook.json',_read(folder/'playbook_snapshot.json',{}))
-    safe_context = {key:state[key] for key in ('stage','model_profile','step','batch','source_sha256','playbook_version') if key in state}
+    safe_context = {key:state[key] for key in ('stage','model_profile','step','batch','source_sha256','playbook_version','simulation','demo') if key in state}
     safe_context.update(exception_type=type(error).__name__,detector_profiles=request.get('detector_profiles',[]),
                         vlm_model=connection.get('model'),vlm_adapter=connection.get('adapter'),
                         playbook_version=playbook.get('version',safe_context.get('playbook_version')))

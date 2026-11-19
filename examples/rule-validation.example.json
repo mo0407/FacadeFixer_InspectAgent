@@ -1,0 +1,50 @@
+{
+  "version": "FORMAT_ONLY_REPLACE_WITH_INDEPENDENT_DATASET_VERSION",
+  "independent_reference_confirmed": false,
+  "cases": [
+    {
+      "id": "replace_case_01",
+      "image_path": "reference-data/REPLACE_WITH_INDEPENDENT_IMAGE_01.png",
+      "scope_mask_path": null,
+      "defects": [
+        {"class_code": "C", "bbox_xyxy": [10.0, 10.0, 40.0, 60.0]},
+        {"class_code": "S", "bbox_xyxy": [80.0, 60.0, 140.0, 120.0]}
+      ]
+    },
+    {
+      "id": "replace_case_02",
+      "image_path": "reference-data/REPLACE_WITH_INDEPENDENT_IMAGE_02.png",
+      "scope_mask_path": null,
+      "defects": [
+        {"class_code": "L", "bbox_xyxy": [20.0, 20.0, 100.0, 80.0]},
+        {"class_code": "B", "bbox_xyxy": [120.0, 40.0, 180.0, 100.0]}
+      ]
+    },
+    {
+      "id": "replace_case_03",
+      "image_path": "reference-data/REPLACE_WITH_INDEPENDENT_IMAGE_03.png",
+      "scope_mask_path": null,
+      "defects": [
+        {"class_code": "C", "bbox_xyxy": [15.0, 15.0, 55.0, 95.0]}
+      ]
+    }
+  ],
+  "targets": {
+    "min_precision": 0.8,
+    "min_recall": 0.8,
+    "min_f1": 0.8,
+    "max_regression": 0.0,
+    "min_improvement": 0.01,
+    "min_cases": 3,
+    "min_reference_defects": 5
+  },
+  "iou_threshold": 0.5,
+  "inspection": {
+    "detector_profiles": ["yolo11m", "yolo12m"],
+    "context_mode": "auto",
+    "max_inspections": 2,
+    "low_threshold": 0.1,
+    "high_threshold": 0.5,
+    "inference_size": 960
+  }
+}

@@ -66,6 +66,9 @@ class FakeVLM:
         assert kwargs["image_paths"]
         assert all(Path(path).is_file() for path in kwargs["image_paths"])
         self.calls.append(copy.deepcopy(task))
+        if task["stage"] == "visual_anchoring":
+            return schema.model_validate({'regions':[{'bbox_normalized':[0,0,1,1], 'role':'context',
+                'description':'Synthetic full-image context; no semantic wall assertion.'}], 'summary':'Fixture context'})
         if task["stage"] == "choose_inspection":
             output = self.actions.pop(0) if self.actions else dict(action="finish", reason="Finished fixture")
         else:
@@ -328,7 +331,7 @@ def test_one_grid_mock_finishes_without_repeating_inspection(tmp_path):
     assert result["inspections_used"] == 1
     assert [step["action"] for step in result["trajectory"]] == ["inspect", "finish"]
     assert len(experts.calls) == 2
-    assert len(gateway.trace) == 3
+    assert len(gateway.trace) == 4
     assert all(t["status"] == "completed" and t["images"] for t in gateway.trace)
 
 
@@ -343,7 +346,7 @@ def test_synthetic_demo_produces_auditable_report_and_artifacts(tmp_path):
     assert (folder / "report.html").is_file()
     assert (folder / "synthetic_tool_calls.json").is_file()
     anchors = json.loads((folder / "anchors.json").read_text(encoding="utf-8"))["anchors"]
-    assert {a["kind"] for a in anchors} == {"Box", "Ghost", "Grid"}
+    assert {a["kind"] for a in anchors} == {"Box", "Ghost", "Grid", "Env"}
     trace = json.loads((folder / "model_trace.json").read_text(encoding="utf-8"))
     assert len(trace) == 3 and all(c["adapter"] == "mock" for c in trace)
     assert store.job_status(result["job_id"])["status"] == "completed"

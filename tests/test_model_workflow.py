@@ -129,7 +129,7 @@ def test_model_tools_publish_scoped_schemas_and_preserve_detection_boxes(tmp_pat
     async def exercise():
         async with Client(create_server(service)) as client:
             tools = {tool.name: tool for tool in await client.list_tools()}
-            assert set(tools) == {"facade_models_list", "facade_models_detect", "facade_models_segment",
+            assert set(tools) == {"facade_models_list", "facade_models_capabilities", "facade_models_detect", "facade_models_segment",
                                   "facade_models_refine", "facade_models_get_job", "facade_models_get_artifact"}
             assert set(tools["facade_models_detect"].input_schema["properties"]) == {
                 "image_paths", "model_profile", "threshold", "inference_size"}

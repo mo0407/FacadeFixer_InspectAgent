@@ -3,26 +3,20 @@
   "api_enabled": false,
   "connections": {
     "image_inspector": {
-      "adapter": "chat_completions",
-      "model": "replace-with-vision-model",
+      "adapter": "responses",
+      "model": "gpt-6.1-sol",
+      "expected_model": "gpt-6.1-sol",
+      "reasoning_effort": "medium",
       "endpoint_env": "FACADE_IMAGE_ENDPOINT",
       "api_key_env": "FACADE_IMAGE_API_KEY",
       "supports_images": true,
       "timeout_seconds": 90,
       "max_output_tokens": 8000
-    },
-    "offline_reflector": {
-      "adapter": "mock",
-      "model": "mock-reflector"
-    },
-    "offline_curator": {
-      "adapter": "mock",
-      "model": "mock-curator"
     }
   },
   "roles": {
     "generator": "image_inspector",
-    "reflector": "offline_reflector",
-    "curator": "offline_curator"
+    "reflector": "image_inspector",
+    "curator": "image_inspector"
   }
 }

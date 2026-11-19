@@ -3,7 +3,7 @@
 CLASS_NAMES = {
     "C": "Crack", "P": "Peeling", "S": "Spalling", "T": "RustStain",
     "R": "Corrosion", "D": "Contamination", "V": "Vegetation",
-    "L": "Leakage", "E": "Efflorescence",
+    "L": "Leakage", "E": "Efflorescence", "B": "Bulging",
 }
 
 
@@ -40,5 +40,7 @@ def normalize_class(record):
 
 
 def opencv_code(record):
+    if record['class_code'] == 'B':
+        raise ValueError('OpenCV mask baseline does not support B/Bulging; select a supported model segmenter.')
     # Upstream L is a generic stain/deposit baseline, not an E-specific model.
     return "L" if record["class_code"] == "E" else record["class_code"]

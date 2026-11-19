@@ -40,6 +40,7 @@ LABEL_CODES = {
     "contaminants": "D", "dirt": "D", "wallstain": "D", "groundlitter": "D",
     "污染物": "D", "污渍": "D", "vegetation": "V", "vegeterian": "V", "植被": "V",
     "waterstain": "L", "leakage": "L", "水渍": "L", "渗漏": "L",
+    "bulging": "B", "bulge": "B", "鼓包": "B", "鼓胀": "B",
 }
 LOCAL_MODELS = {"yolo12m", "yolo11m", "faster_rcnn", "rtdetr", "ensemble", "intersection"}
 
@@ -318,7 +319,7 @@ class DetectionService:
         return data
 
     def _normalize(self, raw: dict, width: int, height: int, threshold: float,
-                   image_id: str, warnings: list[str]):
+                   image_id: str, warnings: list[str], *, canonicalize_labels: bool = True):
         entries = raw.get("defects", raw.get("annotations_in_crop"))
         if not isinstance(entries, list):
             raise DetectionError("INVALID_ANNOTATIONS", "defects or annotations_in_crop must be a list.")
@@ -364,7 +365,8 @@ class DetectionService:
             supplied_code = entry.get("class_code")
             code = str(supplied_code).upper() if supplied_code is not None else LABEL_CODES.get(_label_key(label))
             original_code = code
-            code = canonical_code(code, label, entry.get("class_subtype", ""))
+            if canonicalize_labels:
+                code = canonical_code(code, label, entry.get("class_subtype", ""))
             item = {"instance_id": instance_id, "id": supplied_id, "bbox_xyxy": bbox,
                     "bbox_xyxy_float":bbox_float,"bbox_rounding":"floor_min_ceil_max", "original_class_name": label}
             if original_code != code:

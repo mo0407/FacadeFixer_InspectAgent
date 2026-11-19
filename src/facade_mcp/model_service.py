@@ -15,9 +15,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from .detection_service import DetectionService
+from .detection_service import DetectionService, LABEL_CODES
 from .mask_service import MaskService, _rle
 from .storage import ArtifactStore, sha256
+from .expert_registry import (BUSINESS_CLASSES, composite_identity, definition_fingerprint, load_registry,
+                              local_implementations, registered_definition, registration_capability)
 
 
 # Paths and implementations are server owned. Tool callers select a profile only.
@@ -43,7 +45,7 @@ class ModelError(ValueError):
 class ModelService:
     def __init__(self, store: ArtifactStore, repo_path: Path | None = None,
                  python_path: Path | None = None, device: str | None = None,
-                 timeout_seconds: float | None = None):
+                 timeout_seconds: float | None = None, experts_config: Path | None = None):
         self.store = store
         default_repo = Path(__file__).resolve().parents[3] / "项目代码" / "FacadeFixer-main"
         self.repo = Path(repo_path or os.environ.get("FACADE_SOURCE_REPO", default_repo)).expanduser().resolve()
@@ -53,11 +55,13 @@ class ModelService:
         self.timeout = timeout_seconds if timeout_seconds is not None else os.environ.get("FACADE_SOURCE_TIMEOUT_SECONDS", "600")
         self.masks = MaskService(store)
         self._slot = threading.BoundedSemaphore(1)
+        self.registry = load_registry(experts_config, default_python=self.python, reserved=PROFILES)
 
     def _config(self, profile: str | None = None, operation: str | None = None):
-        if not (self.repo / "model_runner").is_dir() or not (self.repo / "backend").is_dir():
+        registered = self.registry.get(profile)
+        if not registered and (not (self.repo / "model_runner").is_dir() or not (self.repo / "backend").is_dir()):
             raise ModelError("SOURCE_REPO_NOT_FOUND", "Set FACADE_SOURCE_REPO to the FacadeFixer-main checkout.")
-        if not self.python.is_file():
+        if not registered and not self.python.is_file():
             raise ModelError("SOURCE_PYTHON_NOT_FOUND", "Set FACADE_SOURCE_PYTHON to an existing model runtime Python.")
         if not re.fullmatch(r"cpu|cuda(?::[0-9]+)?|[0-9]+", self.device):
             raise ModelError("INVALID_DEVICE", "Device must be cpu, cuda, cuda:N, or a GPU index.")
@@ -70,6 +74,13 @@ class ModelService:
         if not math.isfinite(self.timeout) or not 1 <= self.timeout <= 7200:
             raise ModelError("INVALID_TIMEOUT", "Model timeout must be between 1 and 7200 seconds.")
         if profile is not None:
+            if registered:
+                if operation != 'detection':
+                    raise ModelError('UNKNOWN_MODEL_PROFILE', 'Registered experts are selected through the detection/anchor tool.')
+                capability = registration_capability(profile, registered)
+                if not capability['ready']:
+                    raise ModelError(capability['reason'], 'Registered expert is not ready; install local assets and configure its runtime. No download is performed.')
+                return
             if profile not in PROFILES or PROFILES[profile]["operation"] != operation:
                 raise ModelError("UNKNOWN_MODEL_PROFILE", "Select an approved model profile for this operation.",
                                  allowed=[key for key, value in PROFILES.items() if value["operation"] == operation])
@@ -80,8 +91,12 @@ class ModelService:
     def _run(self, directory: Path, action: str, **arguments) -> dict:
         directory.mkdir(parents=True, exist_ok=True)
         request, output = directory / "worker_input.json", directory / "worker_output.json"
+        registered = self.registry.get(arguments.get('model_profile')) if action == 'detect' else None
+        interpreter = Path(registered['python_path']) if registered else self.python
+        worker_name = 'registered_expert_worker.py' if registered else 'model_worker.py'
+        options = {'expert':registered, 'expected_weights_sha256':sha256(Path(registered['weights_path']))} if registered else {}
         self.store.write_json(request, {"action": action, "repo": str(self.repo), "device": self.device,
-                                       "output_dir": str(directory), **arguments})
+                                       "output_dir": str(directory), **arguments, **options})
         # Do not give the model subprocess API credentials or load source .env files.
         names = {"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH", "PATHEXT", "COMSPEC",
                  "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "LOCALAPPDATA", "APPDATA", "USERPROFILE"}
@@ -89,12 +104,13 @@ class ModelService:
         env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONNOUSERSITE="1",
                    HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_DATASETS_OFFLINE="1",
                    YOLO_AUTOINSTALL="false", YOLO_OFFLINE="true", DO_NOT_TRACK="1",
+                   YOLOv5_AUTOINSTALL="false", PIP_NO_INDEX="1", PIP_DISABLE_PIP_VERSION_CHECK="1",
                    YOLO_CONFIG_DIR=str(directory / "runtime_config"), TORCH_HOME=str(directory / "runtime_cache"),
                    MPLCONFIGDIR=str(directory / "runtime_config" / "matplotlib"))
         if not self._slot.acquire(timeout=float(self.timeout)):
             raise ModelError("MODEL_BUSY", "Another local model process is still running; retry after its job finishes.")
         try:
-            process = subprocess.run([str(self.python), str(Path(__file__).with_name("model_worker.py")),
+            process = subprocess.run([str(interpreter), str(Path(__file__).with_name(worker_name)),
                                       "--request", str(request), "--output", str(output)],
                                      cwd=directory, env=env, capture_output=True, timeout=self.timeout)
         except subprocess.TimeoutExpired:
@@ -120,20 +136,87 @@ class ModelService:
         self.store.fail_job(job_id, failure)
         return {"job_id": job_id, "status": "failed", "error": failure}
 
+    def _definition(self, name: str) -> dict:
+        if name in self.registry:
+            return registered_definition(self.registry[name])
+        specification = PROFILES[name]
+        detection = specification['operation'] == 'detection'
+        definition = dict(backend='facade-source/'+name, task='detect' if detection else 'segment',
+            class_map={label:('S' if code == 'P' else code) for label,code in LABEL_CODES.items()},
+            class_codes=['C','S','T','D','V','L','B'] if detection else (specification.get('class_codes') or list(BUSINESS_CLASSES)),
+            full_image=detection, local_eligible=detection)
+        files = local_implementations()
+        files['facade_mcp/model_worker.py'] = Path(__file__).with_name('model_worker.py')
+        relatives = [specification['source']]
+        if name in ('yolo11m','yolo12m','ensemble','intersection'):
+            relatives.append('model_runner/adapters/detection/yolo.py')
+        if name in ('rtdetr','ensemble','intersection'):
+            relatives.append('model_runner/adapters/detection/rtdetr.py')
+        if detection:
+            relatives.extend(('model_runner/adapters/detection/base.py','model_runner/adapters/detection/common.py'))
+        for relative in set(relatives):
+            files['facade-source/'+relative] = self.repo/relative
+        return definition_fingerprint(definition, files)
+
+    def capabilities(self) -> dict:
+        """Cheap file/hash inventory only: never import/probe model libraries."""
+        profiles = {}
+        # Legacy 12-label detection training table; P/S and crack subtypes are
+        # canonicalized at the image boundary. Runtime labels remain preserved.
+        known_detection = ['C', 'S', 'T', 'D', 'V', 'L', 'B']
+        members = ('yolo12m', 'yolo11m', 'rtdetr')
+        cache = {}
+        def digest(path):
+            if path not in cache:
+                cache[path] = sha256(path)
+            return cache[path]
+        for name, profile in PROFILES.items():
+            detection = profile['operation'] == 'detection'
+            hashes = {member:digest(self.repo / PROFILES[member]['weights'][0])
+                      for member in members if (self.repo / PROFILES[member]['weights'][0]).is_file()} if name in ('ensemble','intersection') else None
+            missing = [path for path in profile['weights'] if not (self.repo / path).is_file()]
+            # Prompt-only SAM/U-Net profiles are not anchor experts. Avoid reading
+            # their often multi-GB checkpoints in this lightweight expert inventory.
+            identity = hashes if hashes is not None else (digest(self.repo / profile['weights'][0]) if detection and not missing else None)
+            reason = 'WEIGHTS_NOT_FOUND' if missing else ('SOURCE_PYTHON_NOT_FOUND' if not self.python.is_file() else
+                     'SOURCE_REPO_NOT_FOUND' if not (self.repo/'model_runner').is_dir() or not (self.repo/'backend').is_dir() else None)
+            profiles[name] = dict(profile=name, registered=False, task='detect' if detection else 'segment',
+                class_codes=known_detection if detection else (profile.get('class_codes') or list(BUSINESS_CLASSES)),
+                local_eligible=detection, full_image=detection, weights_sha256=identity,
+                checkpoint_identity=composite_identity(identity) if isinstance(identity,dict) else identity,
+                ready=reason is None, reason=reason, model_load_verified=False,
+                capability_source='legacy_training_label_table' if detection else 'prompt_conditioned_segmenter',
+                **self._definition(name))
+        profiles.update({name:registration_capability(name, profile) for name,profile in self.registry.items()})
+        return {'schema':'facade-expert-capabilities/v1','profiles':profiles,
+                'model_load_verified':False,'network_called':False,
+                'note':'Readiness checks local paths and checkpoint hashes; it does not verify package availability, training provenance or inference accuracy.'}
+
     def list_tools(self) -> dict:
         job_id, directory = self.store.create_job("model_capabilities", {})
         try:
-            self._config()
-            runtime = self._run(directory, "probe")
+            try:
+                self._config()
+                runtime = self._run(directory, "probe")
+            except ModelError as error:
+                if not self.registry or error.code not in ('SOURCE_REPO_NOT_FOUND','SOURCE_PYTHON_NOT_FOUND'):
+                    raise
+                # Registered experts may use their own independent repositories
+                # and runtimes, even when the legacy source tree is not installed.
+                runtime = {'packages':{},'probe_unavailable_reason':error.code}
+            capabilities = self.capabilities()['profiles']
             rows = []
             for name, profile in PROFILES.items():
                 missing_weights = [value for value in profile["weights"] if not (self.repo / value).is_file()]
                 missing_packages = [value for value in profile["packages"] if not runtime["packages"].get(value)]
-                rows.append({"model_profile": name, **profile,
-                             "availability": "unavailable" if missing_weights or missing_packages else "available_unverified",
+                rows.append({"model_profile": name, **profile, **capabilities[name],
+                             "availability": "unavailable" if missing_weights or missing_packages or not capabilities[name]['ready'] else "available_unverified",
                              "missing_weights": missing_weights, "missing_packages": missing_packages,
                              "model_load_verified": False,
                              "prompt_modes": (["bbox", "point", "text", "compare", "doubao"] if name == "sam3" else ["bbox", "point"] if name == "mobile_sam" else ["bbox"] if name == "unet_crack" else [])})
+            rows.extend({'model_profile':name, **capabilities[name],
+                         'availability':'configured_unverified' if capabilities[name]['ready'] else 'unavailable'}
+                        for name,p in self.registry.items())
             result = {"schema_version": "facade-model-catalog/v1", "status": "configured", "job_id": job_id,
                       "source_repository": str(self.repo), "python": str(self.python), "device": self.device,
                       "runtime": runtime, "models": rows, "paid_api_requests": False,
@@ -166,6 +249,8 @@ class ModelService:
             self._config(model_profile, "detection")
             if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 0 <= threshold <= 1:
                 raise ModelError("INVALID_THRESHOLD", "threshold must be a finite number between 0 and 1.")
+            if inference_size is not None and (type(inference_size) is not int or not 320 <= inference_size <= 1536 or inference_size % 32):
+                raise ModelError('INVALID_INFERENCE_SIZE', 'inference_size must be a multiple of 32 in [320,1536].')
             if not isinstance(image_paths, list) or not image_paths or len(image_paths) > 100:
                 raise ModelError("INVALID_IMAGES", "Supply between 1 and 100 image paths or artifact URIs.")
             paths = [self.store.resolve_input(value) for value in image_paths]
@@ -173,19 +258,68 @@ class ModelService:
                 raise ModelError("DUPLICATE_IMAGE", "Input images must not repeat.")
             images, warnings, worker_artifacts = [], [], []
             normalizer = DetectionService(self.store)
+            registered = self.registry.get(model_profile)
+            expected_weights = sha256(Path(registered['weights_path'])) if registered else None
+            expected_definition = self._definition(model_profile)
             for index, path in enumerate(paths):
                 current = directory / f"image_{index:04d}"
                 snapshot, metadata = self._snapshot(str(path), current)
+                if registered and sha256(Path(registered['weights_path'])) != expected_weights:
+                    raise ModelError('CHECKPOINT_HASH_MISMATCH', 'Registered checkpoint changed within this detection job.')
+                if registered and registered.get('checkpoint_sha256') and expected_weights != registered['checkpoint_sha256']:
+                    raise ModelError('CHECKPOINT_HASH_MISMATCH', 'Configured registered checkpoint hash no longer matches.')
                 size_options = {'inference_size': inference_size} if inference_size is not None else {}
+                if self._definition(model_profile) != expected_definition:
+                    raise ModelError('EXPERT_DEFINITION_CHANGED', 'Expert configuration or implementation changed within this detection job.')
                 raw = self._run(current, "detect", image_path=str(snapshot), model_profile=model_profile,
                                 threshold=threshold, **size_options)
+                actual_definition = self._definition(model_profile)
+                if actual_definition != expected_definition:
+                    raise ModelError('EXPERT_DEFINITION_CHANGED', 'Expert configuration or implementation changed during inference.')
+                provenance = raw.setdefault('model_provenance', {})
+                if provenance.get('definition_sha256', expected_definition['definition_sha256']) != expected_definition['definition_sha256']:
+                    raise ModelError('EXPERT_DEFINITION_CHANGED', 'Worker expert definition does not match this detection job.')
+                provenance.update(actual_definition)
+                if registered:
+                    declared_weights = raw.get('model_provenance',{}).get('weights_sha256')
+                    if declared_weights != expected_weights or sha256(Path(registered['weights_path'])) != expected_weights:
+                        raise ModelError('CHECKPOINT_HASH_MISMATCH', 'Registered checkpoint or inference provenance changed.')
+                    # Explicit mapping owns custom class IDs; no heuristic mapping
+                    # can silently enlarge this expert's declared class capability.
+                    for entry in raw.get('defects',[]):
+                        label = str(entry.get('class_name',''))
+                        entry['class_code'] = registered['class_map'].get(label,
+                            registered['class_map'].get(str(entry.get('class_id')), 'unknown'))
                 if sha256(snapshot) != metadata["source_sha256"]:
                     raise ModelError("SOURCE_CHANGED", "Detection input snapshot changed during inference.")
                 declared = raw.get("model_provenance", {}).get("source_image_sha256")
-                if declared is not None and declared != metadata["source_sha256"]:
+                if (registered or declared is not None) and declared != metadata["source_sha256"]:
                     raise ModelError("MODEL_SOURCE_MISMATCH", "Model result belongs to a different source image.")
                 image_id = "image_" + metadata["source_sha256"][:20]
-                defects, unmapped = normalizer._normalize(raw, metadata["width"], metadata["height"], threshold, image_id, warnings)
+                defects, unmapped = normalizer._normalize(raw, metadata["width"], metadata["height"], threshold, image_id, warnings,
+                                                          canonicalize_labels=not bool(registered))
+                if registered:
+                    normalized = {row['instance_id']:row for row in [*defects,*unmapped]}
+                    for entry in raw.get('defects',[]):
+                        row = normalized.get(str(entry.get('instance_id')))
+                        if row is None:
+                            continue
+                        row['source_model'] = model_profile
+                        if registered['task'] == 'segment' and not entry.get('mask_path'):
+                            raise ModelError('INVALID_MODEL_OUTPUT', 'Segmentation expert omitted original-sized mask evidence.')
+                        if not entry.get('mask_path'):
+                            continue
+                        mask_path = Path(entry['mask_path']).resolve()
+                        if not mask_path.is_relative_to(current.resolve()) or not mask_path.is_file():
+                            raise ModelError('MODEL_OUTPUT_ESCAPE', 'Expert mask must belong to its inference job.')
+                        with Image.open(mask_path) as mask_image:
+                            mask = np.asarray(mask_image)
+                        if mask.shape != (metadata['height'],metadata['width']) or not set(np.unique(mask)) <= {0,255}:
+                            raise ModelError('INVALID_MODEL_OUTPUT', 'Expert mask must be original-sized and binary.')
+                        if entry.get('mask_sha256') != sha256(mask_path):
+                            raise ModelError('INVALID_MODEL_OUTPUT', 'Expert mask evidence hash mismatch.')
+                        row.update(mask_artifact=self.store.artifact(mask_path,'expert_anchor_mask',job_id),
+                                   segmentation_rle=_rle(mask > 0), area_pixels=int(np.count_nonzero(mask)))
                 if metadata["exif_orientation"] not in (None, 1):
                     warnings.append(f"{image_id}: stored pixels used without EXIF rotation.")
                 images.append({"index": index, "image_id": image_id, "image_path": str(snapshot), **metadata,
@@ -196,7 +330,7 @@ class ModelService:
             result = {"status": "completed", "job_id": job_id, "schema": "bbox_class_only_v1",
                       "coordinate_space": "original_pixels", "bbox_convention": "zero_based_xyxy_max_exclusive",
                       "images": images, "source": {"method": "source", "model_profile": model_profile,
-                      "threshold": threshold, "device": self.device}, "provenance": {"worker_outputs": worker_artifacts,
+                      "threshold": threshold, "device": self.device, 'definition_sha256':expected_definition['definition_sha256']}, "provenance": {"worker_outputs": worker_artifacts,
                       "source_repository": str(self.repo), "reference_mask_used": False},
                       "review_required": True, "expert_validated": False, "warnings": list(dict.fromkeys(warnings))}
             manifest = directory / "detections.json"

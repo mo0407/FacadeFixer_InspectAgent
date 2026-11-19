@@ -32,7 +32,7 @@ def test_full_workflow_uses_mcp_and_preserves_real_outputs(tmp_path):
     data = json.loads(annotations.read_text())
     data["images"][0]["defects"][0]["bbox_xyxy"] = [120.3,65.8,244.2,394.9]
     # Keep a detector category without a mask algorithm in the visible report.
-    data["images"][0]["defects"].append({"id":3,"class_name":"Bulging","bbox_xyxy":[650,100,750,200]})
+    data["images"][0]["defects"].append({"id":3,"class_name":"Unmapped_Custom_Defect","bbox_xyxy":[650,100,750,200]})
     annotations.write_text(json.dumps(data),encoding="utf-8")
     store = ArtifactStore(tmp_path/"workspace",[tmp_path])
     result = asyncio.run(run_workflow(request,store,repo))
@@ -47,7 +47,7 @@ def test_full_workflow_uses_mcp_and_preserves_real_outputs(tmp_path):
     assert report["defects"][0]["bbox_xyxy"]==[120,65,245,395]
     assert len(report["defects"])==3 and report["defects"][-1]["area_pixels"] is None
     html = Path(outputs["rendered"]["html"]["path"]).read_text(encoding="utf-8")
-    assert "Bulging" in html and "data:image/png;base64," in html
+    assert "Unmapped_Custom_Defect" in html and "data:image/png;base64," in html
     trace = [json.loads(line) for line in Path(result["trace"]["path"]).read_text(encoding="utf-8").splitlines()]
     assert [row["tool"] for row in trace]==["survey_validate_site","survey_plan_route","media_organize_images","defect_detect","mask_segment_opencv","report_build_draft","report_validate","report_render_html"]
     assert all(row["status"]=="success" for row in trace)

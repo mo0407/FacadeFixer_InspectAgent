@@ -37,7 +37,8 @@ def simulated_worker(monkeypatch, service, *, escape=False, empty=False):
         if action == "detect":
             result = {"status": "completed", "defects": [
                 {"instance_id": "a", "class_name": "Rust_Stain", "bbox_xyxy": [5.2, 6.2, 25.4, 36.4], "confidence": .9},
-                {"instance_id": "b", "class_name": "Bulging", "bbox_xyxy": [40, 10, 70, 35], "confidence": .8}],
+                {"instance_id": "b", "class_name": "Bulging", "bbox_xyxy": [40, 10, 70, 35], "confidence": .8},
+                {"instance_id": "u", "class_name": "Custom_Unknown", "bbox_xyxy": [40, 36, 70, 56], "confidence": .7}],
                 "model_provenance": {"weights_sha256": "fake-for-test-only"}}
         else:
             entries = []
@@ -115,7 +116,8 @@ def test_detect_preserves_unknowns_rounding_snapshot_and_provenance(setup, monke
     row = result["images"][0]
     assert row["defects"][0]["bbox_xyxy"] == [5, 6, 26, 37]
     assert row["defects"][0]["class_code"] == "T"
-    assert row["unmapped_defects"][0]["original_class_name"] == "Bulging"
+    assert row['defects'][1]['class_code'] == 'B'
+    assert row["unmapped_defects"][0]["original_class_name"] == "Custom_Unknown"
     assert row["source_sha256"] == hashlib.sha256(image.read_bytes()).hexdigest()
     assert Path(row["image_path"]) != image
     assert service.get_job(result["job_id"])["result"]["manifest_artifact"] == result["manifest_artifact"]

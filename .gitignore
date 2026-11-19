@@ -37,6 +37,8 @@ latest-result.json
 baseline-source-*.zip
 failure_memory.sqlite3*
 failure-dashboard*.html
+*.local.json
+/rule_lifecycle/
 
 # Machine-specific provenance stays alongside the local backup only.
 backup-manifest.json
