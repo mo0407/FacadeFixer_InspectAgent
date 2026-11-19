@@ -2,6 +2,8 @@
 
 建筑外立面**纯图像主动巡检**工作流。从一张原始图片开始：建立全图锚点，由视觉大模型选择需要放大的区域，最多执行两次原图局部检查，再回映坐标、合并重复候选并逐项复核。
 
+**三图需求核对：当前已具备通用主干，尚未完整复现全部实验约定。**具体差距包括独立 baseline 批评测、0.25 与 Env 的指定语义、8×5 网格、EfficientViT、从空历史生成初始失败材料、受控阈值动作及逐条规则消融。完整对照、验收条件和三张原图见 [三图需求对照与验收](docs/requirements-three-figures.md)。
+
 本项目的 GitHub 仓库为 [FacadeFixer_InspectAgent](https://github.com/mo0407/FacadeFixer_InspectAgent)，本机开发目录 `E:\ai\低空\FacadeFixer_IMAGE` 与该仓库是同一项目。代码从 `FacadeFixer_VIDEO` 复制后独立改造，原视频目录继续保留；原视频版说明见 [video-baseline-readme.md](docs/video-baseline-readme.md)。
 
 本机另保留未改造源码归档 `baseline-source-20261118.zip`、来源与文件校验清单 `backup-manifest.json` 及验证记录 `validation-results.json`。这些本机溯源文件不上传至仓库，无法从远端下载；源码归档包含复制时的 81 个源文件与清单，不含模型权重、密钥或运行缓存。
