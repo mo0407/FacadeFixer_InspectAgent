@@ -23,6 +23,10 @@ def setup(tmp_path):
             path = repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"fixture checkpoint, not a model")
+    # U-Net uses this architecture file even when model execution is stubbed.
+    architecture = repo / 'training/crack_segmentation/unet/unet_transfer.py'
+    architecture.parent.mkdir(parents=True)
+    architecture.write_text('# synthetic source fixture')
     image = tmp_path / "facade.png"
     Image.new("RGB", (80, 60), (175, 175, 175)).save(image)
     service = ModelService(ArtifactStore(tmp_path / "workspace", [tmp_path]), repo, Path(sys.executable))

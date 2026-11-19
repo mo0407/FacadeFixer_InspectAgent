@@ -1,0 +1,13 @@
+#!/bin/sh
+# Dedicated wrapper; do not modify the existing Conda runtime.
+set -eu
+RUNTIME_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+export PYTHONPATH="$RUNTIME_DIR/bootstrap:$RUNTIME_DIR/vendor"
+export PYTHONNOUSERSITE=1
+export TORCH_FORCE_WEIGHTS_ONLY_LOAD=1
+export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-$RUNTIME_DIR/.ultralytics-config}"
+if [ -x "$RUNTIME_DIR/.venv/bin/python" ]; then
+    exec "$RUNTIME_DIR/.venv/bin/python" "$@"
+fi
+printf '%s\n' 'Model runtime missing; run yolov9e_runtime/setup.sh with FACADE_MODEL_BASE_PYTHON.' >&2
+exit 1

@@ -35,6 +35,15 @@ PROFILES = {
     "unet_crack": {"operation": "segmentation", "weights": ["model_weights/crack/model_unet_vgg_16_best.pt"], "packages": ["torch", "torchvision", "cv2"], "source": "backend/run_unet_crack_direct_baseline.py", "interactive": False, "class_codes": ["C"]},
 }
 
+# Files accessed by the corresponding worker even when weights are present.
+# YOLO/RT-DETR and SAM profiles have weights-only fallbacks; these do not.
+REQUIRED_SOURCE_FILES = {
+    'faster_rcnn': ('backend/detection_agent.py',),
+    'ensemble': ('backend/detection_agent.py',),
+    'intersection': ('backend/detection_agent.py',),
+    'unet_crack': ('training/crack_segmentation/unet/unet_transfer.py',),
+}
+
 
 class ModelError(ValueError):
     def __init__(self, code: str, message: str, **details):
@@ -57,10 +66,21 @@ class ModelService:
         self._slot = threading.BoundedSemaphore(1)
         self.registry = load_registry(experts_config, default_python=self.python, reserved=PROFILES)
 
+    def _missing_required_sources(self, profile: str) -> list[str]:
+        missing = []
+        for relative in REQUIRED_SOURCE_FILES.get(profile, ()):
+            try:
+                candidate = (self.repo / relative).resolve()
+                if not candidate.is_relative_to(self.repo) or not candidate.is_file():
+                    missing.append(relative)
+            except (OSError, RuntimeError):
+                missing.append(relative)
+        return missing
+
     def _config(self, profile: str | None = None, operation: str | None = None):
         registered = self.registry.get(profile)
-        if not registered and (not (self.repo / "model_runner").is_dir() or not (self.repo / "backend").is_dir()):
-            raise ModelError("SOURCE_REPO_NOT_FOUND", "Set FACADE_SOURCE_REPO to the FacadeFixer-main checkout.")
+        if not registered and not self.repo.is_dir():
+            raise ModelError("SOURCE_REPO_NOT_FOUND", "Set FACADE_SOURCE_REPO to the parent directory of model_weights.")
         if not registered and not self.python.is_file():
             raise ModelError("SOURCE_PYTHON_NOT_FOUND", "Set FACADE_SOURCE_PYTHON to an existing model runtime Python.")
         if not re.fullmatch(r"cpu|cuda(?::[0-9]+)?|[0-9]+", self.device):
@@ -87,6 +107,10 @@ class ModelService:
             missing = [name for name in PROFILES[profile]["weights"] if not (self.repo / name).is_file()]
             if missing:
                 raise ModelError("WEIGHTS_NOT_FOUND", "Local model weights are missing; no automatic download is performed.", missing=missing)
+            missing_sources = self._missing_required_sources(profile)
+            if missing_sources:
+                raise ModelError('SOURCE_REPO_NOT_FOUND', 'Required model source files are missing from the configured repository.',
+                                 missing=missing_sources)
 
     def _run(self, directory: Path, action: str, **arguments) -> dict:
         directory.mkdir(parents=True, exist_ok=True)
@@ -148,6 +172,7 @@ class ModelService:
         files = local_implementations()
         files['facade_mcp/model_worker.py'] = Path(__file__).with_name('model_worker.py')
         relatives = [specification['source']]
+        relatives.extend(REQUIRED_SOURCE_FILES.get(name, ()))
         if name in ('yolo11m','yolo12m','ensemble','intersection'):
             relatives.append('model_runner/adapters/detection/yolo.py')
         if name in ('rtdetr','ensemble','intersection'):
@@ -175,16 +200,17 @@ class ModelService:
             hashes = {member:digest(self.repo / PROFILES[member]['weights'][0])
                       for member in members if (self.repo / PROFILES[member]['weights'][0]).is_file()} if name in ('ensemble','intersection') else None
             missing = [path for path in profile['weights'] if not (self.repo / path).is_file()]
+            missing_sources = self._missing_required_sources(name)
             # Prompt-only SAM/U-Net profiles are not anchor experts. Avoid reading
             # their often multi-GB checkpoints in this lightweight expert inventory.
             identity = hashes if hashes is not None else (digest(self.repo / profile['weights'][0]) if detection and not missing else None)
             reason = 'WEIGHTS_NOT_FOUND' if missing else ('SOURCE_PYTHON_NOT_FOUND' if not self.python.is_file() else
-                     'SOURCE_REPO_NOT_FOUND' if not (self.repo/'model_runner').is_dir() or not (self.repo/'backend').is_dir() else None)
+                     'SOURCE_REPO_NOT_FOUND' if not self.repo.is_dir() or missing_sources else None)
             profiles[name] = dict(profile=name, registered=False, task='detect' if detection else 'segment',
                 class_codes=known_detection if detection else (profile.get('class_codes') or list(BUSINESS_CLASSES)),
                 local_eligible=detection, full_image=detection, weights_sha256=identity,
                 checkpoint_identity=composite_identity(identity) if isinstance(identity,dict) else identity,
-                ready=reason is None, reason=reason, model_load_verified=False,
+                ready=reason is None, reason=reason, missing_source_files=missing_sources, model_load_verified=False,
                 capability_source='legacy_training_label_table' if detection else 'prompt_conditioned_segmenter',
                 **self._definition(name))
         profiles.update({name:registration_capability(name, profile) for name,profile in self.registry.items()})

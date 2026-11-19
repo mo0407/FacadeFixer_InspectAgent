@@ -222,7 +222,6 @@ def run_segmentation(repo: Path, profile: str, image_path: Path, output_dir: Pat
     repo, image_path, output_dir = Path(repo).resolve(), Path(image_path).resolve(), Path(output_dir).resolve()
     weights_relative, source_relative = _PROFILES[profile]
     weights = _source_path(repo, weights_relative)
-    source = _source_path(repo, source_relative)
     input_sha256 = _sha256(image_path)
     with Image.open(image_path) as image:
         # Avoid EXIF transposition and metadata-dependent library rotation.
@@ -241,7 +240,9 @@ def run_segmentation(repo: Path, profile: str, image_path: Path, output_dir: Pat
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["YOLO_CONFIG_DIR"] = str(output_dir / "runtime-config")
     os.environ["MPLCONFIGDIR"] = str(output_dir / "runtime-config" / "matplotlib")
-    source_files = {source_relative: _sha256(source)}
+    source_files = {}
+    if (repo / source_relative).is_file():
+        source_files[source_relative] = _sha256(_source_path(repo, source_relative))
     if profile == "unet_crack":
         architecture_relative = "training/crack_segmentation/unet/unet_transfer.py"
         source_files[architecture_relative] = _sha256(_source_path(repo, architecture_relative))

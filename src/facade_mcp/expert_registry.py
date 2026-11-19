@@ -41,6 +41,8 @@ def definition_fingerprint(profile: dict, implementations: dict[str, Path]) -> d
 
 def registered_definition(profile: dict) -> dict:
     files = local_implementations()
+    for name, path in (profile.get('implementation_files') or {}).items():
+        files['expert_runtime/'+name] = Path(path)
     if profile['backend'] == 'yolov9':
         repo = Path(profile['repo_path'])
         for relative in ('models/common.py', 'models/yolo.py', 'models/experimental.py',
@@ -63,6 +65,7 @@ class ExpertProfile(BaseModel):
     python_path: str | None = None
     reference_name: str | None = Field(default=None, max_length=200)
     checkpoint_sha256: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    implementation_files: dict[str, str] = Field(default_factory=dict, max_length=100)
 
     @model_validator(mode='after')
     def constraints(self):
@@ -76,6 +79,9 @@ class ExpertProfile(BaseModel):
             raise ValueError('class_codes must equal the classes produced by class_map')
         if any(not key.strip() or len(key) > 200 for key in self.class_map):
             raise ValueError('Checkpoint labels must be nonempty and at most 200 characters')
+        if any(not re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', name) or not path.strip()
+               for name, path in self.implementation_files.items()):
+            raise ValueError('Implementation file names must be safe and paths nonempty')
         return self
 
 
@@ -99,11 +105,17 @@ def load_registry(config_path: Path | None = None, *, default_python: Path | Non
         raise ValueError('At most 50 registered experts are allowed')
     roots = [path.parent, *[Path(p).expanduser().resolve() for p in os.getenv('FACADE_EXPERTS_ALLOWED_ROOTS', '').split(';') if p.strip()]]
 
-    def local(value):
-        candidate = (path.parent / Path(value).expanduser()).resolve()
+    def local(value, *, preserve_link=False):
+        requested = Path(os.path.abspath(path.parent / Path(value).expanduser()))
+        candidate = requested.resolve()
         if not any(candidate.is_relative_to(root) for root in roots):
             raise ValueError('Expert paths must remain under registry parent or FACADE_EXPERTS_ALLOWED_ROOTS')
-        return str(candidate)
+        # A venv's python may be a symlink: starting its resolved target skips
+        # pyvenv.cfg and loads the wrong environment. Validate both locations
+        # while preserving the requested interpreter path for execution.
+        if preserve_link and not any(requested.is_relative_to(root) for root in roots):
+            raise ValueError('Expert paths must remain under registry parent or FACADE_EXPERTS_ALLOWED_ROOTS')
+        return str(requested if preserve_link else candidate)
 
     result = {}
     for name, raw in data['profiles'].items():
@@ -112,7 +124,9 @@ def load_registry(config_path: Path | None = None, *, default_python: Path | Non
         profile = ExpertProfile.model_validate(raw).model_dump()
         for key in ('weights_path', 'repo_path', 'python_path'):
             if profile.get(key):
-                profile[key] = local(profile[key])
+                profile[key] = local(profile[key], preserve_link=key == 'python_path')
+        profile['implementation_files'] = {name: local(value)
+                                           for name, value in profile['implementation_files'].items()}
         if not profile['python_path']:
             if default_python is None:
                 raise ValueError('Configure a server-owned model Python runtime')
@@ -131,6 +145,8 @@ def registration_capability(name: str, profile: dict) -> dict:
         reason = 'CHECKPOINT_HASH_MISMATCH'
     elif not Path(profile['python_path']).is_file():
         reason = 'SOURCE_PYTHON_NOT_FOUND'
+    elif any(not Path(path).is_file() for path in (profile.get('implementation_files') or {}).values()):
+        reason = 'EXPERT_IMPLEMENTATION_NOT_FOUND'
     elif profile['backend'] == 'yolov9' and not all((Path(profile['repo_path']) / f).is_file() for f in
                                                   ('models/common.py', 'utils/augmentations.py', 'utils/general.py',
                                                    'utils/segment/general.py', 'utils/torch_utils.py')):

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+runtime_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+export YOLO_CONFIG_DIR="${YOLO_CONFIG_DIR:-$runtime_dir/.ultralytics-config}"
+exec "$runtime_dir/.venv/bin/python" "$runtime_dir/launch.py" "$@"

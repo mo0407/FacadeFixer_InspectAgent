@@ -171,3 +171,29 @@ def test_source_import_refuses_cached_other_repository(local_input, monkeypatch)
     monkeypatch.setitem(sys.modules, "model_runner.adapters.detection.yolo", SimpleNamespace(__file__=str(repo.parent / "other.py")))
     with pytest.raises(RuntimeError, match="different FacadeFixer"):
         worker._source_adapter(repo, "yolo12m", repo / worker.WEIGHTS["yolo12m"])
+
+
+def test_checkpoint_only_detection_preserves_size_labels_and_provenance(local_input, monkeypatch):
+    """Deployments may have weights without the optional legacy loader source."""
+    repo, image, output = local_input
+    calls = []
+
+    class Model:
+        def __init__(self, checkpoint):
+            calls.append(checkpoint)
+
+        def predict(self, **kwargs):
+            calls.append(kwargs)
+            box = SimpleNamespace(cls=np.array([0]), conf=np.array([.86]),
+                                  xyxy=np.array([[1., 2., 10., 18.]]))
+            return [SimpleNamespace(names={0: "Concrete_Crack"}, boxes=[box])]
+
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=Model, RTDETR=Model))
+    result = worker.run_detection(repo, "yolo12m", image, output, .25, "cpu", inference_size=960)
+    assert calls[0] == str(repo / worker.WEIGHTS["yolo12m"])
+    assert calls[1]["imgsz"] == 960
+    assert result["defects"][0]["class_name"] == "Concrete_Crack"
+    provenance = result["model_provenance"]
+    assert provenance["models"][0]["source_integration"] == "ultralytics_checkpoint_loader"
+    assert provenance["source_files_sha256"] == {}
+    assert provenance["weights_sha256"] == hashlib.sha256((repo / worker.WEIGHTS["yolo12m"]).read_bytes()).hexdigest()

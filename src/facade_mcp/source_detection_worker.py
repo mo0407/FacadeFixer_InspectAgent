@@ -69,7 +69,12 @@ def _offline():
 
 def _source_adapter(repo: Path, profile: str, checkpoint: Path):
     kind = "rtdetr" if profile == "rtdetr" else "yolo"
-    source = _local_file(repo, f"model_runner/adapters/detection/{kind}.py")
+    relative = f"model_runner/adapters/detection/{kind}.py"
+    if not (repo / relative).exists():
+        from ultralytics import RTDETR, YOLO
+        loader = RTDETR if profile == "rtdetr" else YOLO
+        return loader(str(checkpoint)), None
+    source = _local_file(repo, relative)
     module_name = f"model_runner.adapters.detection.{kind}"
     # Every invocation normally has a fresh process. Refuse a different source
     # tree accidentally cached by a caller that reuses the interpreter.
@@ -159,7 +164,8 @@ def _run_single(repo, profile, raster_bgr, threshold, device, inference_size=Non
                 label = names.get(class_id, f"unmapped_model_class_{class_id}") if isinstance(names, dict) else (
                     names[class_id] if 0 <= class_id < len(names) else f"unmapped_model_class_{class_id}")
                 predictions.append(_prediction(label, class_id, box.conf[0], box.xyxy[0], width, height, profile))
-        source_files[source_path.relative_to(repo).as_posix()] = _sha256(source_path)
+        if source_path is not None:
+            source_files[source_path.relative_to(repo).as_posix()] = _sha256(source_path)
         library = "ultralytics"
     from importlib.metadata import PackageNotFoundError, version
     try:
@@ -174,7 +180,10 @@ def _run_single(repo, profile, raster_bgr, threshold, device, inference_size=Non
     if profile == "faster_rcnn":
         provenance["source_integration"] = "adapted_fixed_detectron2_configuration"
     else:
-        provenance["source_integration"] = "original_model_loader_with_label_preserving_postprocess"
+        provenance["source_integration"] = (
+            "original_model_loader_with_label_preserving_postprocess" if source_path is not None
+            else "ultralytics_checkpoint_loader"
+        )
     return [p for p in predictions if p is not None and p["confidence"] >= threshold], provenance
 
 

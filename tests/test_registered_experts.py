@@ -1,7 +1,9 @@
 """Synthetic contracts only: no real model checkpoints, downloads or paid APIs."""
 import json
 from pathlib import Path
+import subprocess
 import sys
+import venv
 
 import numpy as np
 from PIL import Image
@@ -63,6 +65,45 @@ def test_registry_cannot_replace_builtin(tmp_path):
     config,_=registration(tmp_path)
     with pytest.raises(ValueError,match='not replace builtins'):
         load_registry(config,default_python=Path(sys.executable),reserved=['fixture_seg'])
+
+
+def test_runtime_source_paths_are_confined_and_included_in_expert_definition(tmp_path):
+    config, weights = registration(tmp_path, implementation_files={'custom_block': 'runtime/block.py'})
+    runtime = tmp_path/'runtime/block.py'
+    runtime.parent.mkdir()
+    runtime.write_text('# original runtime implementation\n')
+    service = ModelService(ArtifactStore(tmp_path/'workspace', [tmp_path]),
+                           repo_path=tmp_path/'absent', python_path=Path(sys.executable), experts_config=config)
+    try:
+        before = service.capabilities()['profiles']['fixture_seg']
+        assert before['ready']
+        assert before['implementation_sha256']['expert_runtime/custom_block'] == sha256(runtime)
+        runtime.write_text('# modified runtime implementation\n')
+        after = service.capabilities()['profiles']['fixture_seg']
+        assert before['weights_sha256'] == after['weights_sha256'] == sha256(weights)
+        assert before['definition_sha256'] != after['definition_sha256']
+        runtime.unlink()
+        assert service.capabilities()['profiles']['fixture_seg']['reason'] == 'EXPERT_IMPLEMENTATION_NOT_FOUND'
+    finally:
+        service.masks.close()
+    data = json.loads(config.read_text())
+    data['profiles']['fixture_seg']['implementation_files']['custom_block'] = '../outside.py'
+    config.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='paths must remain'):
+        load_registry(config, default_python=Path(sys.executable))
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX venv symlink layout')
+def test_registry_preserves_venv_interpreter_symlink(tmp_path, monkeypatch):
+    env = tmp_path/'model-env'
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(env)
+    interpreter = env/'bin/python'
+    monkeypatch.setenv('FACADE_EXPERTS_ALLOWED_ROOTS', str(interpreter.resolve().parent))
+    config, _ = registration(tmp_path, python_path=str(interpreter))
+    profile = load_registry(config, default_python=Path(sys.executable))['fixture_seg']
+    assert Path(profile['python_path']) == interpreter
+    output = subprocess.check_output([profile['python_path'], '-c', 'import sys; print(sys.prefix)'], text=True)
+    assert Path(output.strip()) == env
 
 
 def test_capabilities_never_probe_and_report_actual_weights(configured,monkeypatch):
@@ -366,3 +407,19 @@ def test_mutating_expert_definition_during_inference_rejects_job(configured,monk
     monkeypatch.setattr(service,'_run',run)
     result=service.detect([str(image)],'fixture_seg')
     assert result['error']['code']=='EXPERT_DEFINITION_CHANGED'
+
+
+def test_mutating_runtime_source_during_inference_rejects_job(configured, monkeypatch, tmp_path):
+    service, image, _ = configured
+    runtime = tmp_path/'runtime.py'
+    runtime.write_text('# original implementation\n')
+    service.registry['fixture_seg']['implementation_files'] = {'block': str(runtime)}
+    fake_inference(service, monkeypatch)
+    original = service._run
+    def run(*args, **kwargs):
+        result = original(*args, **kwargs)
+        runtime.write_text('# changed implementation\n')
+        return result
+    monkeypatch.setattr(service, '_run', run)
+    result = service.detect([str(image)], 'fixture_seg')
+    assert result['error']['code'] == 'EXPERT_DEFINITION_CHANGED'

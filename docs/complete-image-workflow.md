@@ -31,6 +31,10 @@ $env:FACADE_EXPERTS_ALLOWED_ROOTS = "E:\models;E:\runtimes;E:\sources"
 
 示例内的所有路径均位于配置父目录下；相对路径按该父目录解析。外部绝对路径必须处于 `FACADE_EXPERTS_ALLOWED_ROOTS` 的分号分隔白名单中。可选 `checkpoint_sha256` 应填本机真实文件的 64 位小写 SHA-256，用于固定版本；示例未填写伪 hash。能力查询只检查文件及 hash，不加载模型、不下载资产；`ready=true` 与 `model_load_verified=false` 并存，不代表推理成功。
 
+`python_path` 可指向虚拟环境内的 Python 符号链接，启动时保留该入口，以便 Python 找到虚拟环境。注册时链接入口和解析后的目标均须位于上述服务器允许根内；若基础解释器位于其他目录，也应将其目录加入白名单。
+
+自定义模型运行时代码可在 profile 中用 `implementation_files` 声明，例如 `{"backbone": "server-assets/runtime/ultralytics/nn/backbone/efficientViT.py"}`。键只能使用字母、数字、点、下划线或连字符，文件路径遵循同样的服务器目录白名单。声明文件缺失时专家不可用；文件的 SHA-256 会进入专家定义指纹，检查前后不一致时任务会失败。此配置只记录并检查声明的文件，并不自动导入它们，也不证明 Python 实际导入的文件与声明一致；仍须在独立运行环境核实实际加载路径和模型推理。
+
 分割专家返回的每实例 mask 以该次输入图的原尺寸二值 PNG 保存，并校验路径、尺寸、像素值和 hash，附带 RLE、面积和 artifact。局部输入的 mask 尺寸对应局部原像素裁剪，候选框另行平移回全图。结构化巡检结果保留专家 mask 的 artifact 引用，报告主输出仍是候选框与核验决定；需要生成或点修最终 mask 时使用 `facade_models_segment` / `facade_models_refine`。`B` 表示鼓包，是业务类别；OpenCV mask baseline 明确不支持 `B`，应选择适用的模型分割器并复核结果。
 
 ## 模型配置与一次运行

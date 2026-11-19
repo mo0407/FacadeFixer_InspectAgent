@@ -1,0 +1,57 @@
+{
+  "profiles": {
+    "cubit_yolov9e": {
+      "backend": "ultralytics",
+      "task": "segment",
+      "class_map": {
+        "crack": "C",
+        "spalling": "S"
+      },
+      "class_codes": [
+        "C",
+        "S"
+      ],
+      "local_eligible": true,
+      "full_image": true,
+      "python_path": "yolov9e_runtime/python",
+      "weights_path": "cubit-inseg-paper-2026/yolov9e-seg-cubit-best.pt",
+      "checkpoint_sha256": "0353f35c1f136fa4c5a3b1411341355758c6971fbbcb01198cea4b9abc518603",
+      "reference_name": "CUBIT paper YOLOv9e; experimental Ultralytics compatibility",
+      "implementation_files": {
+        "launcher": "yolov9e_runtime/python",
+        "bootstrap": "yolov9e_runtime/bootstrap/sitecustomize.py",
+        "compat_block": "yolov9e_runtime/bootstrap/yolo_compat/extra_modules/block.py",
+        "ultralytics_tasks": "yolov9e_runtime/vendor/ultralytics/nn/tasks.py",
+        "ultralytics_block": "yolov9e_runtime/vendor/ultralytics/nn/modules/block.py",
+        "ultralytics_conv": "yolov9e_runtime/vendor/ultralytics/nn/modules/conv.py",
+        "ultralytics_head": "yolov9e_runtime/vendor/ultralytics/nn/modules/head.py"
+      }
+    },
+    "cubit_efficientvit_m5": {
+      "backend": "ultralytics",
+      "task": "segment",
+      "class_map": {
+        "crack": "C",
+        "spalling": "S"
+      },
+      "class_codes": [
+        "C",
+        "S"
+      ],
+      "local_eligible": true,
+      "full_image": true,
+      "python_path": "efficientvit_runtime/python-worker",
+      "weights_path": "cubit-inseg-paper-2026/efficientvit-m5-seg-cubit-best.pt",
+      "checkpoint_sha256": "cfbc562cdca0766d06a2c7d328977ceda0a78f25b38bca0ccc67e11baeb6be00",
+      "reference_name": "CUBIT paper EfficientViT-M5; experimental Ultralytics compatibility",
+      "implementation_files": {
+        "launcher": "efficientvit_runtime/python-worker",
+        "bootstrap": "efficientvit_runtime/launch.py",
+        "backbone": "efficientvit_runtime/efficientvit_compat.py",
+        "ultralytics_tasks": "efficientvit_runtime/.venv/lib/python3.10/site-packages/ultralytics/nn/tasks.py",
+        "ultralytics_block": "efficientvit_runtime/.venv/lib/python3.10/site-packages/ultralytics/nn/modules/block.py",
+        "ultralytics_head": "efficientvit_runtime/.venv/lib/python3.10/site-packages/ultralytics/nn/modules/head.py"
+      }
+    }
+  }
+}
