@@ -407,6 +407,12 @@ class RuleLifecycle:
         parent = (parent or published or Playbook(version='P0-empty')).model_copy(deep=True)
         parent_hash = playbook_hash(parent)
         events = self._history(job_ids)
+        # Compact baseline events rely on a transitive artifact manifest.  This
+        # legacy entry point snapshots direct references only; accepting them
+        # here would bypass full-coverage manifest validation via CLI or MCP.
+        if any(event.get('context', {}).get('evidence_reference_mode') == 'manifest_chain'
+               for event in events):
+            raise ValueError('Compact baseline evidence requires full-coverage P0 validation')
         event_ids = {event['event_id'] for event in events}
         job, folder = self.store.create_job('rule_proposal', {'job_ids': job_ids, 'parent_sha256': parent_hash})
         gateway = ModelGateway(settings, allow_api=allow_api, transport=transport)

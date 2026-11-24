@@ -4,11 +4,11 @@ CUBIT 论文模型下载及实验性单图运行环境见 [模型接入说明](m
 
 建筑外立面**纯图像主动巡检**工作流。从一张原始图片开始：建立全图锚点，由视觉大模型选择需要放大的区域，最多执行两次原图局部检查，再回映坐标、合并重复候选并逐项复核。
 
-**三图需求核对：当前已具备通用主干，尚未完整复现全部实验约定。**具体差距包括独立 baseline 批评测、0.25 与 Env 的指定语义、8×5 网格、EfficientViT、从空历史生成初始失败材料、受控阈值动作及逐条规则消融。完整对照、验收条件和三张原图见 [三图需求对照与验收](docs/requirements-three-figures.md)。
+**四图实验仍在开发和验证中。** 图 1 的指定 203 张图片已完成一轮处理，离线阶段产生了尚未推广的 P0 候选；图 2、图 4 和独立规则验证尚待安排。实验数据、参考标注和结果的限制见 [图 1 与 P0 实验记录和运行说明](docs/figure1-p0-experiment.md)，完整需求见 [四图需求与执行清单](docs/requirements-four-figures.md)。
 
-本项目的 GitHub 仓库为 [FacadeFixer_InspectAgent](https://github.com/mo0407/FacadeFixer_InspectAgent)，本机开发目录 `E:\ai\低空\FacadeFixer_IMAGE` 与该仓库是同一项目。代码从 `FacadeFixer_VIDEO` 复制后独立改造，原视频目录继续保留；原视频版说明见 [video-baseline-readme.md](docs/video-baseline-readme.md)。
+本项目的 GitHub 仓库为 [FacadeFixer_InspectAgent](https://github.com/mo0407/FacadeFixer_InspectAgent)。代码从视频项目复制后独立改造；原视频版说明见 [video-baseline-readme.md](docs/video-baseline-readme.md)。
 
-本机另保留未改造源码归档 `baseline-source-20261118.zip`、来源与文件校验清单 `backup-manifest.json` 及验证记录 `validation-results.json`。这些本机溯源文件不上传至仓库，无法从远端下载；源码归档包含复制时的 81 个源文件与清单，不含模型权重、密钥或运行缓存。
+数据、权重、运行结果及本地溯源材料需自行准备，未随仓库分发。
 
 ## 图像工作流
 
@@ -33,7 +33,7 @@ flowchart LR
 
 同一轮内使用同一份 P0，不在检测途中修改规则。Generator 负责本轮视觉检查；Reflector、Curator 在离线阶段整理有证据的失败与规则候选。候选通过独立参考集的真实成对重放、质量门槛和正向改善检验后，才能发布为下一轮默认加载的 P0；mock 或注入的测试执行器不能晋升正式规则。
 
-已增加 YOLOv9 分割与 Ultralytics 自定义检测/分割的注册适配器；CUBIT 权重与训练数据需自行提供，尚未进行真实 CUBIT 权重验收。内置示例继续使用 `yolo11m` 与 `yolo12m`。完整步骤见 [图像检查与离线规则闭环](docs/complete-image-workflow.md)。
+已增加 YOLOv9 分割与 Ultralytics 自定义检测/分割的注册适配器；CUBIT 权重与训练数据需自行提供。实验兼容推理不代表已验证与论文作者实现的数值一致性或检测准确率。内置示例继续使用 `yolo11m` 与 `yolo12m`。完整步骤见 [图像检查与离线规则闭环](docs/complete-image-workflow.md)。
 
 ## 快速开始
 
@@ -55,13 +55,7 @@ facade-image --workspace workspace image-demo --output-dir examples/generated_im
 
 演示中的图片、候选框与模型回答均为测试数据，用于检查裁剪、坐标回映、去重与报告链路，不表示真实建筑的检测效果。
 
-也可复用本机已有 Python 环境，避免改动原视频环境的安装包：
-
-```powershell
-Set-Location "E:\ai\低空\FacadeFixer_IMAGE"
-$env:PYTHONPATH = (Resolve-Path .\src).Path
-& "E:\ai\低空\facade_mcp_langchain\.venv\Scripts\python.exe" -m facade_mcp.cli --workspace workspace image-demo --output-dir examples/generated_image_demo
-```
+也可在已有兼容 Python 环境中安装项目，或将项目的 `src` 加入 `PYTHONPATH` 后运行模块。
 
 ## 处理自己的图片
 
@@ -70,8 +64,8 @@ $env:PYTHONPATH = (Resolve-Path .\src).Path
 3. 配置支持图片输入的 VLM；远程执行需要配置文件中的 `api_enabled=true`，并在命令中显式加入 `--allow-api`。
 
 ```powershell
-$env:FACADE_SOURCE_REPO = "E:\ai\低空\项目代码\FacadeFixer-main"
-$env:FACADE_SOURCE_PYTHON = "E:\ai\低空\项目代码\FacadeFixer-main\.venv\Scripts\python.exe"
+$env:FACADE_SOURCE_REPO = "<模型源码目录>"
+$env:FACADE_SOURCE_PYTHON = "<模型环境中的 Python 可执行文件>"
 $env:FACADE_SOURCE_DEVICE = "cpu"
 
 facade-image --workspace workspace image-inspect --config examples/image-inspection.example.json --model-config examples/image-models.mock.json --playbook examples/image-playbook.json
